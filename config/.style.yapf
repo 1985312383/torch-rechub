@@ -1,0 +1,81 @@
+# ===================================================================
+# YAPF Configuration - Google Python Style (Extended Line Limit)
+# ===================================================================
+# This file defines code formatting rules for torch-rechub project
+# Usage: yapf --style=config/.style.yapf --in-place file.py
+#
+# VS Code Configuration Example:
+# "python.formatting.provider": "yapf",
+# "python.formatting.yapfArgs": ["--style=config/.style.yapf"],
+# "editor.formatOnSave": true,
+# "editor.formatOnType": true
+#
+# More info: config/yapf_config.py
+
+[style]
+# Based on Google Python style guide
+# Google style emphasizes readability and consistency
+based_on_style = google
+
+# Maximum characters per line (248 chars for better readability)
+column_limit = 248
+
+# Number of spaces before inline comments
+# Example: x = 1  # This is a comment (two spaces)
+spaces_before_comment = 2
+
+# Split before logical operators for better readability
+# Example: if (condition1
+#           and condition2):
+split_before_logical_operator = true
+
+# Split before dict set generator
+split_before_dict_set_generator = true
+
+# Don't allow split before dict value (keep compact)
+allow_split_before_dict_value = false
+
+# Allow multiline lambda expressions
+allow_multiline_lambdas = true
+
+# Indentation width (4 spaces, follows PEP8)
+indent_width = 4
+
+# Continuation indentation width
+continuation_indent_width = 4
+
+# Align closing bracket with visual indent
+# Makes code hierarchy clearer
+align_closing_bracket_with_visual_indent = true
+
+# Allow splitting all comma-separated values
+# Automatically wrap when too many parameters/elements
+split_all_comma_separated_values = true
+
+# Put closing brackets on separate line
+# Improves code readability
+dedent_closing_brackets = true
+
+# Don't force each key-value pair on separate line in multiline dict
+force_multiline_dict = false
+
+# Spaces around power operator
+spaces_around_power_operator = true
+
+# Blank line before nested class or function definition
+blank_line_before_nested_class_or_def = true
+
+# Don't force blank line before module docstring
+blank_line_before_module_docstring = false
+
+# Don't merge multiple lines into single line (preserve structure)
+join_multiple_lines = false
+
+# Split before expression after opening parenthesis
+split_before_expression_after_opening_paren = true
+
+# ===================================================================
+# For more configuration options and explanations:
+# - config/yapf_config.py (detailed documentation)  
+# - config/CONFIG_GUIDE.md (complete configuration guide)
+# =================================================================== 

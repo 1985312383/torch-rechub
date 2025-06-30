@@ -1,0 +1,59 @@
+# ===================================================================
+# Flake8 配置文件 - Python代码检查工具
+# ===================================================================
+# Flake8是一个Python代码检查工具，结合了pycodestyle、pyflakes和mccabe
+# 这个配置文件针对torch-rechub项目进行了优化
+# 与YAPF(Google风格)配合使用，确保代码质量
+# 更多信息请参考: config/CONFIG_GUIDE.md
+
+[flake8]
+# 最大行长度，与YAPF配置保持一致
+max-line-length = 248
+
+# 忽略的错误代码 (与Google风格和YAPF兼容)
+extend-ignore = 
+    E203,  # whitespace before ':' (与YAPF冲突)
+    E501,  # line too long (由max-line-length控制)
+    W503,  # line break before binary operator (推荐在操作符前分行)
+    F401,  # imported but unused (在__init__.py中常见)
+    E402,  # module level import not at top of file (某些情况下需要)
+    E129,  # visually indented line with same indent as next logical line
+    E126,  # continuation line over-indented for hanging indent
+    E121,  # continuation line under-indented for hanging indent
+
+# 排除检查的目录和文件
+exclude = 
+    .git,                # Git目录
+    __pycache__,         # Python缓存目录
+    docs/source/conf.py, # Sphinx配置文件
+    old,                 # 旧代码目录
+    build,               # 构建目录
+    dist,                # 分发目录
+    .venv,               # 虚拟环境目录
+    venv,                # 虚拟环境目录
+    .eggs,               # Egg目录
+    *.egg,               # Egg文件
+    .pytest_cache,       # Pytest缓存
+    .coverage            # 覆盖率文件
+
+# 针对特定文件的忽略规则
+per-file-ignores =
+    __init__.py:F401     # __init__.py中允许未使用的导入
+    tests/*:D            # 测试文件中忽略文档字符串检查
+
+# 最大圈复杂度 (McCabe复杂度)
+# 控制函数的复杂度，提高代码可维护性
+max-complexity = 10
+
+# 文档字符串约定 (使用Google风格)
+docstring-convention = google
+
+# ===================================================================
+# 错误代码说明:
+# E: pycodestyle错误
+# W: pycodestyle警告  
+# F: pyflakes错误
+# C: mccabe复杂度
+# D: pydocstyle文档字符串
+# 完整列表: https://flake8.pycqa.org/en/latest/user/error-codes.html
+# =================================================================== 

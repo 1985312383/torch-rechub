@@ -1,0 +1,110 @@
+# ===================================================================
+# PyProject.toml - 项目构建和工具配置
+# ===================================================================
+# 这个文件包含了项目的构建配置和代码质量工具配置
+# 更多配置说明请参考: config/CONFIG_GUIDE.md
+
+# 构建系统配置
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# 项目元数据
+[project]
+name = "torch-rechub"
+version = "0.0.4"
+description = "A Lighting Pytorch Framework for Recommendation Models, Easy-to-use and Easy-to-extend."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "datawhalechina", email = "opensource@datawhale.club"}
+]
+keywords = ["pytorch", "recommendation", "deep learning", "machine learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=1.8.0",
+    "torchvision",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "yapf",
+    "isort",
+    "flake8",
+    "mypy",
+    "pre-commit",
+]
+docs = [
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocs-mermaid2-plugin",
+]
+
+[project.urls]
+Homepage = "https://github.com/datawhalechina/torch-rechub"
+Documentation = "https://datawhalechina.github.io/torch-rechub"
+Repository = "https://github.com/datawhalechina/torch-rechub"
+Issues = "https://github.com/datawhalechina/torch-rechub/issues"
+
+# ===================================================================
+# 工具配置
+# ===================================================================
+
+# YAPF 代码格式化配置 (Google风格)
+[tool.yapf]
+based_on_style = "google"           # 基于Google Python风格指南
+column_limit = 248                  # 每行最大字符数，提高可读性
+spaces_before_comment = 2           # 行内注释前的空格数
+split_before_logical_operator = true # 在逻辑运算符前分行
+
+# isort 导入排序配置
+[tool.isort]
+profile = "google"                  # 使用Google风格的导入排序
+line_length = 248                   # 行长度，与YAPF保持一致
+multi_line_output = 3               # 多行导入的输出模式
+include_trailing_comma = true       # 在多行导入末尾添加逗号
+force_grid_wrap = 0                 # 强制网格包装的导入数量
+use_parentheses = true              # 在多行导入中使用括号
+ensure_newline_before_comments = true # 确保注释前有换行
+
+# MyPy 类型检查配置 (可选)
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false       # 允许未类型化的函数定义
+ignore_missing_imports = true       # 忽略缺失的导入
+
+# Coverage 配置
+[tool.coverage.run]
+source = ["torch_rechub"]
+omit = [
+    "tests/*",
+    "setup.py",
+    "torch_rechub/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+] 
