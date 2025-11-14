@@ -18,7 +18,7 @@ class SequenceFeature(object):
         initializer(Initializer): Initializer the embedding layer weight.
     """
 
-    def __init__(self, name, vocab_size, embed_dim=None, pooling="mean", shared_with=None, padding_idx=None, initializer=RandomNormal(0, 0.0001)):
+    def __init__(self, name, vocab_size, embed_dim=None, pooling="mean", shared_with=None, padding_idx=None, initializer=RandomNormal(0, 0.0001), l1_reg=None, l2_reg=None):
         self.name = name
         self.vocab_size = vocab_size
         if embed_dim is None:
@@ -29,6 +29,8 @@ class SequenceFeature(object):
         self.shared_with = shared_with
         self.padding_idx = padding_idx
         self.initializer = initializer
+        self.l1_reg = l1_reg if l1_reg is not None else 0.0
+        self.l2_reg = l2_reg if l2_reg is not None else 0.0
 
     def __repr__(self):
         return f'<SequenceFeature {self.name} with Embedding shape ({self.vocab_size}, {self.embed_dim})>'
@@ -51,7 +53,7 @@ class SparseFeature(object):
         initializer(Initializer): Initializer the embedding layer weight.
     """
 
-    def __init__(self, name, vocab_size, embed_dim=None, shared_with=None, padding_idx=None, initializer=RandomNormal(0, 0.0001)):
+    def __init__(self, name, vocab_size, embed_dim=None, shared_with=None, padding_idx=None, initializer=RandomNormal(0, 0.0001), l1_reg=None, l2_reg=None):
         self.name = name
         self.vocab_size = vocab_size
         if embed_dim is None:
@@ -61,6 +63,8 @@ class SparseFeature(object):
         self.shared_with = shared_with
         self.padding_idx = padding_idx
         self.initializer = initializer
+        self.l1_reg = l1_reg if l1_reg is not None else 0.0
+        self.l2_reg = l2_reg if l2_reg is not None else 0.0
 
     def __repr__(self):
         return f'<SparseFeature {self.name} with Embedding shape ({self.vocab_size}, {self.embed_dim})>'

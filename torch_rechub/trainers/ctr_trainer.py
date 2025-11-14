@@ -5,6 +5,7 @@ import tqdm
 from sklearn.metrics import roc_auc_score
 
 from ..basic.callback import EarlyStopper
+from ..basic.layers import EmbeddingLayer
 
 
 class CTRTrainer(object):
@@ -61,6 +62,16 @@ class CTRTrainer(object):
         self.early_stopper = EarlyStopper(patience=earlystop_patience)
         self.model_path = model_path
 
+    def _get_regularization_loss(self):
+        """获取模型的正则化损失"""
+        model = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+
+        # 只处理标准的self.embedding属性
+        if hasattr(model, 'embedding') and isinstance(model.embedding, EmbeddingLayer):
+            return model.embedding.get_regularization_loss()
+
+        return 0.0
+
     def train_one_epoch(self, data_loader, log_interval=10):
         self.model.train()
         total_loss = 0
@@ -74,6 +85,11 @@ class CTRTrainer(object):
             else:
                 y_pred, other_loss = self.model(x_dict)
                 loss = self.criterion(y_pred, y) + other_loss
+
+            # 计算正则化损失
+            reg_loss = self._get_regularization_loss()
+            loss = loss + reg_loss
+
             self.model.zero_grad()
             loss.backward()
             self.optimizer.step()

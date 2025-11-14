@@ -6,6 +6,7 @@ import torch.nn as nn
 import tqdm
 
 from ..basic.callback import EarlyStopper
+from ..basic.layers import EmbeddingLayer
 from ..models.multi_task import ESMM
 from ..utils.data import get_loss_func, get_metric_func
 from ..utils.mtl import MetaBalance, gradnorm, shared_task_layers
@@ -99,6 +100,16 @@ class MTLTrainer(object):
         self.model.to(self.device)
         self.model_path = model_path
 
+    def _get_regularization_loss(self):
+        """获取模型的正则化损失"""
+        model = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+
+        # 只处理标准的self.embedding属性
+        if hasattr(model, 'embedding') and isinstance(model.embedding, EmbeddingLayer):
+            return model.embedding.get_regularization_loss()
+
+        return 0.0
+
     def train_one_epoch(self, data_loader):
         self.model.train()
         total_loss = np.zeros(self.n_task)
@@ -139,6 +150,9 @@ class MTLTrainer(object):
                     w.data = w.data * normalize_coeff
             else:
                 self.model.zero_grad()
+                # 计算正则化损失
+                reg_loss = self._get_regularization_loss()
+                loss = loss + reg_loss
                 loss.backward()
                 self.optimizer.step()
             total_loss += np.array([l.item() for l in loss_list])

@@ -53,6 +53,7 @@ class EmbeddingLayer(nn.Module):
         super().__init__()
         self.features = features
         self.embed_dict = nn.ModuleDict()
+        self.reg_dict = {}  # {embed_name: (l1_coef, l2_coef)}
         self.n_dense = 0
 
         for fea in features:
@@ -60,8 +61,10 @@ class EmbeddingLayer(nn.Module):
                 continue
             if isinstance(fea, SparseFeature) and fea.shared_with is None:
                 self.embed_dict[fea.name] = fea.get_embedding_layer()
+                self.reg_dict[fea.name] = (fea.l1_reg, fea.l2_reg)
             elif isinstance(fea, SequenceFeature) and fea.shared_with is None:
                 self.embed_dict[fea.name] = fea.get_embedding_layer()
+                self.reg_dict[fea.name] = (fea.l1_reg, fea.l2_reg)
             elif isinstance(fea, DenseFeature):
                 self.n_dense += 1
 
@@ -116,6 +119,17 @@ class EmbeddingLayer(nn.Module):
                 return sparse_emb  # [batch_size, num_features, embed_dim]
             else:
                 raise ValueError("If keep the original shape:[batch_size, num_features, embed_dim], expected %s in feature list, got %s" % ("SparseFeatures", features))
+
+    def get_regularization_loss(self):
+        """计算所有embedding的L1/L2正则化损失"""
+        reg_loss = 0.0
+        for embed_name, (l1_coef, l2_coef) in self.reg_dict.items():
+            embed = self.embed_dict[embed_name]
+            if l1_coef > 0:
+                reg_loss += l1_coef * torch.norm(embed.weight, p=1)
+            if l2_coef > 0:
+                reg_loss += l2_coef * torch.norm(embed.weight, p=2)
+        return reg_loss
 
 
 class InputMask(nn.Module):
