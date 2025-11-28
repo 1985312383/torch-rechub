@@ -36,7 +36,7 @@ This implementation aims to match the official architecture details:
 
 import math
 import warnings
-from typing import Optional, Union, List, Dict, Any
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -58,10 +58,8 @@ except ImportError:
 def _check_transformers_available():
     """Check if transformers library is available."""
     if not HAS_TRANSFORMERS:
-        raise ImportError(
-            "transformers library is required for LLM support. "
-            "Install it with: pip install transformers>=4.30.0"
-        )
+        raise ImportError("transformers library is required for LLM support. "
+                          "Install it with: pip install transformers>=4.30.0")
 
 
 class RMSNorm(nn.Module):
@@ -90,7 +88,7 @@ class RMSNorm(nn.Module):
             Tensor: Normalized output of same shape.
         """
         # Calculate RMS
-        rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
+        rms = torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + self.eps)
         # Normalize and scale
         return x / rms * self.weight
 
@@ -204,10 +202,8 @@ class ItemLLM(nn.Module):
         quantization_config = None
         if load_in_8bit or load_in_4bit:
             if BitsAndBytesConfig is None:
-                raise ImportError(
-                    "bitsandbytes is required for quantization. "
-                    "Install it with: pip install bitsandbytes>=0.39.0"
-                )
+                raise ImportError("bitsandbytes is required for quantization. "
+                                  "Install it with: pip install bitsandbytes>=0.39.0")
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=load_in_8bit,
                 load_in_4bit=load_in_4bit,
@@ -250,7 +246,9 @@ class ItemLLM(nn.Module):
         self,
         item_texts: List[str],
         return_dict: bool = False,
-    ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+    ) -> Union[torch.Tensor,
+               Dict[str,
+                    torch.Tensor]]:
         """Extract item embeddings from text descriptions.
 
         Args:
@@ -393,10 +391,8 @@ class UserLLM(nn.Module):
         quantization_config = None
         if load_in_8bit or load_in_4bit:
             if BitsAndBytesConfig is None:
-                raise ImportError(
-                    "bitsandbytes is required for quantization. "
-                    "Install it with: pip install bitsandbytes>=0.39.0"
-                )
+                raise ImportError("bitsandbytes is required for quantization. "
+                                  "Install it with: pip install bitsandbytes>=0.39.0")
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=load_in_8bit,
                 load_in_4bit=load_in_4bit,
@@ -509,7 +505,7 @@ class HLLMTransformerBlock(nn.Module):
 
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self.head_dim = d_model // n_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
 
         # Multi-head self-attention
         self.W_Q = nn.Linear(d_model, d_model)
@@ -718,7 +714,8 @@ class HLLMModel(nn.Module):
 
     def __init__(
         self,
-        item_embeddings: Optional[Union[torch.Tensor, str]] = None,
+        item_embeddings: Optional[Union[torch.Tensor,
+                                        str]] = None,
         vocab_size: int = None,
         d_model: int = 512,
         n_heads: int = 8,
@@ -750,16 +747,12 @@ class HLLMModel(nn.Module):
 
         # Validate inputs
         if item_embeddings is None and item_llm_path is None:
-            raise ValueError(
-                "Either item_embeddings or item_llm_path must be provided. "
-                "Use item_embeddings for lightweight mode, or item_llm_path for full LLM mode."
-            )
+            raise ValueError("Either item_embeddings or item_llm_path must be provided. "
+                             "Use item_embeddings for lightweight mode, or item_llm_path for full LLM mode.")
 
         if item_llm_path is not None and item_texts is None:
-            raise ValueError(
-                "item_texts must be provided when using item_llm_path. "
-                "This should be a list of text descriptions for all items."
-            )
+            raise ValueError("item_texts must be provided when using item_llm_path. "
+                             "This should be a list of text descriptions for all items.")
 
         if vocab_size is None:
             raise ValueError("vocab_size must be provided.")
@@ -799,10 +792,8 @@ class HLLMModel(nn.Module):
             # Update d_model to match Item LLM output
             actual_d_model = self.item_llm.hidden_size
             if d_model != actual_d_model:
-                warnings.warn(
-                    f"d_model ({d_model}) does not match Item LLM hidden size ({actual_d_model}). "
-                    f"Using {actual_d_model} instead."
-                )
+                warnings.warn(f"d_model ({d_model}) does not match Item LLM hidden size ({actual_d_model}). "
+                              f"Using {actual_d_model} instead.")
                 self.d_model = actual_d_model
                 d_model = actual_d_model
         else:
@@ -814,10 +805,8 @@ class HLLMModel(nn.Module):
 
             # Verify d_model matches embedding dimension
             if item_embeddings.shape[1] != d_model:
-                warnings.warn(
-                    f"d_model ({d_model}) does not match item_embeddings dimension ({item_embeddings.shape[1]}). "
-                    f"Using {item_embeddings.shape[1]} instead."
-                )
+                warnings.warn(f"d_model ({d_model}) does not match item_embeddings dimension ({item_embeddings.shape[1]}). "
+                              f"Using {item_embeddings.shape[1]} instead.")
                 self.d_model = item_embeddings.shape[1]
                 d_model = item_embeddings.shape[1]
 
@@ -845,17 +834,14 @@ class HLLMModel(nn.Module):
             self.output_projection = nn.Identity()
 
             # Lightweight Transformer blocks
-            self.transformer_blocks = nn.ModuleList([
-                HLLMTransformerBlock(
-                    d_model=d_model,
-                    n_heads=n_heads,
-                    dropout=dropout,
-                    use_swiglu=use_swiglu,
-                    norm_type=norm_type,
-                    ffn_multiplier=ffn_multiplier,
-                )
-                for _ in range(n_layers)
-            ])
+            self.transformer_blocks = nn.ModuleList([HLLMTransformerBlock(
+                d_model=d_model,
+                n_heads=n_heads,
+                dropout=dropout,
+                use_swiglu=use_swiglu,
+                norm_type=norm_type,
+                ffn_multiplier=ffn_multiplier,
+            ) for _ in range(n_layers)])
 
             # Relative position bias
             self.use_rel_pos_bias = use_rel_pos_bias
@@ -1014,10 +1000,8 @@ class HLLMModel(nn.Module):
             batch_size (int): Batch size for encoding. Default: 32.
         """
         if self.item_llm is None:
-            raise RuntimeError(
-                "update_item_embeddings is only available when item_llm_path is provided. "
-                "For pre-computed embeddings, create a new model instance."
-            )
+            raise RuntimeError("update_item_embeddings is only available when item_llm_path is provided. "
+                               "For pre-computed embeddings, create a new model instance.")
 
         print(f"Updating item embeddings for {len(item_texts)} items...")
         with torch.no_grad():
