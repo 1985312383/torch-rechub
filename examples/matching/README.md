@@ -33,29 +33,44 @@
 
 
 ## YiDian-News
-一点资讯-CTR比赛数据集
+
+一点资讯 CTR 比赛数据集的处理版，用于点击率预估（CTR Prediction）和推荐系统排序任务。
 
 ### 全量数据
-* 原始数据为NewsDataset.zip[(下载链接)](https://cowtransfer.com/s/7ee14d7550d749) ，包括下面`数据列表`说明的信息。
+* 原始数据为NewsDataset.zip[(下载链接)](https://aistudio.baidu.com/dataset/detail/389517)
+主数据按体积分为 32 个 CSV 分卷：
 
-* `1.1 EDA&preprocess-train_data` and `1.2 EDA&preprocess-user_info` 是对原始数据train_data.txt和user_info.txt的EDA和预处理，输出user_item.pkl和user.pkl。（PS：pkl的读取速度是csv的好几倍，所以存储为pkl格式）
+- `yidian_news_processed_part_0001.csv`
+- ...
+- `yidian_news_processed_part_0032.csv`
 
-* `2. merge&transform` 读取上一步的输出，将user和user-item连接，将showPos、refresh分桶，将network转为One-Hot向量，输出all_data.pkl。**此notebook对内存要求较高，建议60G以上。** 最终数据量1亿8千万，38列。[最终输出及脚本文件下载地址](https://cowtransfer.com/s/46f663bc4fce42)
+调试样例为 `_sample.csv`，包含 1000 行数据。压缩包为 `dataset.zip`。
 
-#### 数据列表：
-1. 用户信息user_info.txt，“\t”分割，各列字段为：用户id、设备名称、操作系统、所在省、所在市、年龄、性别； 
-2. 文章信息doc_info.txt，“\t”分割，各列字段为：文章id、标题、发文时间、图片数量、一级分类、二级分类、关键词；
-3. 训练数据train_data.txt，“\t”分割，各列字段为：用户id、文章id、展现时间、网路环境、刷新次数、展现位置、是否点击、消费时长（秒）；
+如需恢复为单个完整 CSV，可在 `YiDian_News_dataset/` 目录运行：
 
-#### 数据项说明：
-1. 网络环境：0：未知；1：离线；2：WiFi；3：2g；4：3g；5：4g；
-2. 刷新次数：用户打开APP后推荐页的刷新次数，直到退出APP则清零；
-3. 训练数据取自用户历史12天的行为日志，测试数据采样自第13天的用户展现日志；
+```powershell
+python merge_csv_big.py "yidian_news_processed_part_*.csv" yidian_news_processed.csv
+```
 
-#### 参考资料
-[比赛链接](https://tech.yidianzixun.com/competition/#/)
+合并后的 `yidian_news_processed.csv` 可直接用于训练或离线分析。数据体量较大，快速验证流程时建议优先使用 `_sample.csv`。
 
-[第一参赛者笔记](https://www.logicjake.xyz/2021/09/20/%E4%B8%80%E7%82%B9%E8%B5%84%E8%AE%AF%E6%8A%80%E6%9C%AF%E7%BC%96%E7%A8%8B%E5%A4%A7%E8%B5%9BCTR%E8%B5%9B%E9%81%93-%E8%B5%9B%E5%90%8E%E6%80%BB%E7%BB%93/)
+#### 数据列表
+
+处理后的 CSV 共 22 列：
+
+1. 行为字段：`userId`、`itemId`、`showTime`、`network`、`refresh`、`showPos`、`click`、`duration`；
+2. 用户字段：`deviceName`、`OS`、`province`、`city`、`age_0_24`、`age_25_29`、`age_30_39`、`age_40plus`、`female`、`male`；
+3. 文章字段：`publishTime`、`imageNum`、`cate1`、`cate2`。
+
+#### 数据项说明
+
+1. 网络环境：0 未知；1 离线；2 WiFi；3 2G；4 3G；5 4G；
+2. 刷新次数：用户打开 APP 后推荐页的刷新次数，直到退出 APP 则清零；
+3. `click` 为二分类标签，0 表示未点击，1 表示点击；
+4. `duration` 为消费时长，单位为秒；
+5. 原始训练数据取自用户历史 12 天的行为日志，测试数据采样自第 13 天的用户展现日志。
+
+
 
 ## Million Song Dataset
 百万歌曲音乐数据集（事实上这个数据集很很多种，同时也有不同社区对它进行处理，我们只选取它数据量比较少且文件结构简单的一个）
@@ -96,6 +111,6 @@
 |  NARM |          0.6746         |          0.2827         |          0.7028         |          0.2909         |        0.5829       |        0.2603       |
 | STAMP |          0.6675         |          0.2859         |          0.7079         |          0.3074         |        0.5578       |        0.2303       |
 
-* __Neural Attentive Session-based Recommendation__ ([Li et al., CIKM'17](https://dl.acm.
+* __Neural Attentive Session-based Recommendation__ ([Li et al., CIKM'17](https://arxiv.org/abs/1711.04725.
 * __STAMP: Short-Term Attention/Memory Priority Model for Session-based Recommendation__  ([Liu et al., KDD'18](https://dl.acm.org/doi/10.1145/3219819.3219950))
 * 注：以上指标可使用论文中实验章节提到的训练参数测试得到。排序指标 `top_k` 则需要调整成 `20`。
