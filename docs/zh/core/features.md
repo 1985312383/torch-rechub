@@ -73,6 +73,38 @@ sequence_feature = SequenceFeature(
 - `padding_idx`：填充索引，在InputMask层中会被掩码为0
 - `initializer`：嵌入层权重初始化器
 
+## Feature 实例与 Embedding 所有权
+
+> **注意**：`SparseFeature` 和 `SequenceFeature` 会缓存通过 `get_embedding_layer()` 创建的 `nn.Embedding`。如果将**同一个 Feature 实例**传给多个模型，这些模型会使用同一份 Embedding 参数；训练或加载其中一个模型的权重时，其他模型看到的 Embedding 也会随之变化。
+
+下面的两个 EmbeddingLayer 会意外共享 `city` 的 Embedding：
+
+```python
+from torch_rechub.basic.features import SparseFeature
+from torch_rechub.basic.layers import EmbeddingLayer
+
+features = [SparseFeature(name="city", vocab_size=100, embed_dim=16)]
+
+embedding_a = EmbeddingLayer(features)
+embedding_b = EmbeddingLayer(features)
+
+assert embedding_a.embed_dict["city"] is embedding_b.embed_dict["city"]
+```
+
+进行独立的模型对比、交叉验证或集成训练时，请为每个模型重新创建 Feature 实例：
+
+```python
+def build_features():
+    return [SparseFeature(name="city", vocab_size=100, embed_dim=16)]
+
+embedding_a = EmbeddingLayer(build_features())
+embedding_b = EmbeddingLayer(build_features())
+
+assert embedding_a.embed_dict["city"] is not embedding_b.embed_dict["city"]
+```
+
+仅复制列表并不能解决该问题：`features.copy()` 仍然包含原来的 Feature 实例。这里所说的跨模型意外共享，也不同于在同一个模型内使用 `shared_with` 显式共享 Embedding；后者是预期行为。
+
 ## 特征使用示例
 
 ```python
