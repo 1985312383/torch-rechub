@@ -55,6 +55,38 @@ sequence_feature = SequenceFeature(
 
 Parameters: `name`, `vocab_size`, `embed_dim` (auto if None), `pooling` (mean/sum/concat), `shared_with`, `padding_idx`, `initializer`.
 
+## Feature Instances and Embedding Ownership
+
+> **Warning**: `SparseFeature` and `SequenceFeature` cache the `nn.Embedding` created by `get_embedding_layer()`. If the **same Feature instance** is passed to multiple models, those models use the same embedding parameters. Training or loading weights into one model therefore changes the embedding observed by the others.
+
+The two EmbeddingLayer instances below unintentionally share the `city` embedding:
+
+```python
+from torch_rechub.basic.features import SparseFeature
+from torch_rechub.basic.layers import EmbeddingLayer
+
+features = [SparseFeature(name="city", vocab_size=100, embed_dim=16)]
+
+embedding_a = EmbeddingLayer(features)
+embedding_b = EmbeddingLayer(features)
+
+assert embedding_a.embed_dict["city"] is embedding_b.embed_dict["city"]
+```
+
+For independent model comparisons, cross-validation, or ensemble training, create new Feature instances for every model:
+
+```python
+def build_features():
+    return [SparseFeature(name="city", vocab_size=100, embed_dim=16)]
+
+embedding_a = EmbeddingLayer(build_features())
+embedding_b = EmbeddingLayer(build_features())
+
+assert embedding_a.embed_dict["city"] is not embedding_b.embed_dict["city"]
+```
+
+Copying only the list does not help: `features.copy()` still contains the original Feature instances. This accidental cross-model sharing is different from explicitly using `shared_with` to share an embedding inside one model; the latter is intentional.
+
 ## Usage Example
 
 ```python
