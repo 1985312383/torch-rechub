@@ -195,12 +195,27 @@ trainer = MTLTrainer(
     task_types=["classification", "classification"],
     optimizer_params={"lr": 1e-3},
     regularization_params={"embedding_l2": 0.0, "dense_l2": 0.0},
-    adaptive_params=None,   # Optional: {"method": "uwl"} / {"method": "gradnorm"} / {"method": "metabalance"}
+    adaptive_params=None,   # Optional: {"method": "uwl"}
     n_epoch=10,
     earlystop_taskid=0,
     earlystop_patience=10,
     device="cpu",
     model_path="./saved/mtl",
+)
+```
+
+Only equal weighting (`None`) and UWL are currently recommended. The `gradnorm` / `metabalance` branches in `MTLTrainer.train_one_epoch()` reference an unassigned `loss` before regularization is added and are not usable configurations.
+
+ESMM is a special case: it returns `[cvr, ctr, ctcvr]`. Build its DataLoader with three label columns and configure the trainer as follows:
+
+```python
+esmm_trainer = MTLTrainer(
+    model,
+    task_types=["classification", "classification", "classification"],
+    optimizer_params={"lr": 1e-3},
+    n_epoch=10,
+    device="cpu",
+    model_path="./saved/esmm",
 )
 ```
 

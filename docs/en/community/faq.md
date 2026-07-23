@@ -5,78 +5,53 @@ description: Torch-RecHub frequently asked questions and troubleshooting guide
 
 # FAQ
 
-Torch-RecHub frequently asked questions and troubleshooting guide.
+Frequently asked questions and troubleshooting guidance for Torch-RecHub.
 
-* **Will there be a TensorFlow version?**
+## Will there be a TensorFlow version?
 
-    - Not currently planned
+There are no current plans for one. PyTorch is the project's only runtime, and the focus is on recommendation-model implementations that are easy to learn and extend.
 
-    - This project's core positioning is to provide easy-to-use model implementations for beginners, referencing industry-used models. PyTorch has a wider audience.
+## Why is the example AUC low or unstable?
 
-* **Why does running the example give AUC=0?**
+The sample datasets under `examples/` are intentionally small and only validate data formats, feature definitions, and the training path. They are not intended for model-quality comparisons. Download the complete datasets linked from the README and create proper train, validation, and test splits before comparing models.
 
-    - The examples use 100 sample records for users to reference data format and feature types, ensuring the code runs smoothly. Accuracy is not guaranteed.
-    - If you need to test performance, download the data from the links described in the README, then refer to the parameter configuration files in the examples for model training and evaluation.
+## What should I do if Annoy fails to install on Windows?
 
-- **Annoy Installation**
+Install the Annoy extra declared by the project:
 
-    - Windows installation
+```bash
+python -m pip install "torch-rechub[annoy]"
+```
 
-        - Online installation
+If pip cannot find a wheel for the current Python version and platform, it builds Annoy from source. When Windows reports `Microsoft Visual C++ 14.0 or greater is required`, install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/), reopen the terminal, and rerun the command. Do not install an old wheel built for a different Python version.
 
-        ```bash
-        pip install annoy
-        ```
+![Annoy build environment error](/img/win_install_annoy_error.png "Annoy build environment error")
 
-        If Windows doesn't have a C++ compilation environment, you may see this error:
+## Why does `torch_rechub.serving` still fail to import after installing one vector backend?
 
-        ```bash
-        error: Microsoft Visual C++ 14.0 or greater is required. Get it with "Microsoft C++ Build Tools": https://visualstudio.microsoft.com/visual-cpp-build-tools/
-        ```
+The current `torch_rechub.serving` package imports the Annoy, Faiss, and Milvus implementations together. Install all three extras when using the unified `builder_factory` entry point:
 
-        In this case, use offline installation:
+```bash
+python -m pip install "torch-rechub[annoy,faiss,milvus]"
+```
 
-        - Offline installation
+## Why does `fit()` report that the model save path does not exist?
 
-        Annoy library download: [https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy](https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy)
+Trainers do not create `model_path` automatically. Create it before training:
 
-        ```bash
-        pip install annoy‑1.17.0‑cp39‑cp39‑win_amd64.whl
-        ```
+```python
+import os
+from torch_rechub.trainers import CTRTrainer
 
-    - Linux/macOS installation
+os.makedirs("saved/deepfm", exist_ok=True)
+trainer = CTRTrainer(model, model_path="saved/deepfm")
+trainer.fit(train_dataloader, val_dataloader)
+```
 
-        - Online installation
+## Why does an example fail to find its data when run from another directory?
 
-        ```bash
-        pip install annoy
-        ```
+Some historical examples use data paths relative to the script directory. Change into the relevant `examples/ranking`, `examples/matching`, or other example directory first. When a script exposes the option, you can instead pass an explicit path with `--dataset_path`.
 
-        Normally macOS can install online successfully. If online installation fails with a nose-related error, use offline compilation:
+## Can the same Feature objects be passed to multiple models?
 
-        - Offline installation
-
-          - Download nose
-
-            Download: [https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy](https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy)
-
-            ```bash
-            pip install nose‑1.3.7‑py3‑none‑any.whl
-            ```
-
-          - Download annoy
-
-            Download: [https://files.pythonhosted.org/packages/a1/5b/1c22129f608b3f438713b91cd880dc681d747a860afe3e8e0af86e921942/annoy-1.17.0.tar.gz](https://files.pythonhosted.org/packages/a1/5b/1c22129f608b3f438713b91cd880dc681d747a860afe3e8e0af86e921942/annoy-1.17.0.tar.gz)
-
-            ```bash
-            tar -zxvf annoy-1.17.0.tar.gz
-            cd annoy-1.17.0
-            python setup.py install
-            ```
-
-      After installing annoy, you can install torch-rechub:
-
-      ```bash
-      pip install --upgrade torch-rechub
-      ```
-
+This is not recommended. `SparseFeature` and `SequenceFeature` cache their created embeddings, so reusing the same Feature instance makes multiple models share parameters. See [Feature Instances and Embedding Ownership](/core/features#feature-instances-and-embedding-ownership).

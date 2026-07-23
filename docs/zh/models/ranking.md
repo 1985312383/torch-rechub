@@ -28,6 +28,7 @@ Cheng, Heng-Tze, et al. "Wide & deep learning for recommender systems." Proceedi
 ### 使用方法
 
 ```python
+from torch_rechub.basic.features import DenseFeature, SparseFeature
 from torch_rechub.models.ranking import WideDeep
 
 # 定义特征
@@ -127,10 +128,9 @@ from torch_rechub.models.ranking import DCN
 
 # 创建模型
 model = DCN(
-    deep_features=sparse_features + dense_features,
-    cross_features=sparse_features,
+    features=sparse_features + dense_features,
+    n_cross_layers=3,
     mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    cross_num_layers=3
 )
 ```
 
@@ -138,10 +138,9 @@ model = DCN(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| cross_features | list | Cross 部分使用的特征列表 | None |
+| features | list | Cross 与 Deep 部分共用的特征列表 | 必填 |
 | mlp_params | dict | 深度神经网络参数 | None |
-| cross_num_layers | int | Cross Network 的层数 | 3 |
+| n_cross_layers | int | Cross Network 的层数 | 必填 |
 
 ### 适用场景
 
@@ -153,7 +152,7 @@ model = DCN(
 
 ### 功能描述
 
-DCNv2 是 DCN 的增强版本，引入了特征选择单元和动态缩放机制，进一步提高了模型的表达能力和效率。
+DCNv2 是 DCN 的增强版本，将 Cross Network 的标量/向量参数扩展为矩阵交互；本项目同时支持低秩专家混合，以降低完整矩阵交互的成本。
 
 ### 论文引用
 
@@ -163,9 +162,9 @@ Wang, Ruoxi, et al. "DCN V2: Improved deep & cross network and practical lessons
 
 ### 核心原理
 
-- **特征选择单元**：为每个特征分配动态权重，自动选择重要特征
-- **动态缩放机制**：引入标量参数，自适应调整特征交叉的贡献
-- **更灵活的交叉网络**：支持不同的交叉形式
+- **矩阵式交叉**：比 DCN 的向量式交叉表达力更强
+- **低秩专家混合**：`use_low_rank_mixture=True` 时使用多个低秩 Cross 专家
+- **结构可选**：支持 `crossnet_only`、`stacked` 和 `parallel`
 
 ### 使用方法
 
@@ -174,10 +173,13 @@ from torch_rechub.models.ranking import DCNv2
 
 # 创建模型
 model = DCNv2(
-    deep_features=sparse_features + dense_features,
-    cross_features=sparse_features,
+    features=sparse_features + dense_features,
+    n_cross_layers=3,
     mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    cross_num_layers=3
+    model_structure="parallel",       # crossnet_only / stacked / parallel
+    use_low_rank_mixture=True,
+    low_rank=32,
+    num_experts=4,
 )
 ```
 
@@ -185,10 +187,13 @@ model = DCNv2(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| cross_features | list | Cross 部分使用的特征列表 | None |
+| features | list | Cross 与 Deep 部分共用的特征列表 | 必填 |
 | mlp_params | dict | 深度神经网络参数 | None |
-| cross_num_layers | int | Cross Network 的层数 | 3 |
+| n_cross_layers | int | Cross Network 的层数 | 必填 |
+| model_structure | str | `crossnet_only` / `stacked` / `parallel` | `parallel` |
+| use_low_rank_mixture | bool | 是否使用低秩专家混合 CrossNet | True |
+| low_rank | int | 低秩维度 | 32 |
+| num_experts | int | CrossNetMix 专家数 | 4 |
 
 ### 适用场景
 
@@ -221,10 +226,11 @@ from torch_rechub.models.ranking import EDCN
 
 # 创建模型
 model = EDCN(
-    deep_features=sparse_features + dense_features,
-    cross_features=sparse_features,
+    features=sparse_features + dense_features,
+    n_cross_layers=3,
     mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    cross_num_layers=3
+    bridge_type="hadamard_product",
+    use_regulation_module=True,
 )
 ```
 
@@ -232,10 +238,11 @@ model = EDCN(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| cross_features | list | Cross 部分使用的特征列表 | None |
+| features | list | 模型使用的全部特征 | 必填 |
 | mlp_params | dict | 深度神经网络参数 | None |
-| cross_num_layers | int | Cross Network 的层数 | 3 |
+| n_cross_layers | int | Cross Network 的层数 | 必填 |
+| bridge_type | str | Cross/Deep 桥接方式 | `hadamard_product` |
+| use_regulation_module | bool | 是否使用特征调节模块 | True |
 
 ### 适用场景
 
@@ -268,9 +275,9 @@ from torch_rechub.models.ranking import AFM
 
 # 创建模型
 model = AFM(
-    deep_features=sparse_features + dense_features,
     fm_features=sparse_features,
-    attention_params={"attention_dim": 64, "dropout": 0.2}
+    embed_dim=16,  # 必须与 fm_features 的 embedding 维度一致
+    t=64,
 )
 ```
 
@@ -278,9 +285,9 @@ model = AFM(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| fm_features | list | FM 部分使用的特征列表 | None |
-| attention_params | dict | 注意力网络参数 | None |
+| fm_features | list | 参与 FM 交互的稀疏特征，嵌入维度需一致 | 必填 |
+| embed_dim | int | 特征嵌入维度 | 必填 |
+| t | int | 注意力隐藏层维度 | 64 |
 
 ### 适用场景
 
@@ -313,9 +320,10 @@ from torch_rechub.models.ranking import FiBiNet
 
 # 创建模型
 model = FiBiNet(
-    deep_features=sparse_features + dense_features,
-    fm_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    features=sparse_features,
+    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
+    reduction_ratio=3,
+    bilinear_type="field_interaction",
 )
 ```
 
@@ -323,9 +331,10 @@ model = FiBiNet(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| fm_features | list | FM 部分使用的特征列表 | None |
-| mlp_params | dict | 深度神经网络参数 | None |
+| features | list | 参与 SENET 和双线性交互的特征 | 必填 |
+| mlp_params | dict | 预测 MLP 参数 | 必填 |
+| reduction_ratio | int | SENET 压缩比 | 3 |
+| bilinear_type | str | `field_all` / `field_each` / `field_interaction` | `field_interaction` |
 
 ### 适用场景
 
@@ -356,18 +365,29 @@ Xiao, Jun, et al. "Deep learning over multi-field categorical data." European co
 ```python
 from torch_rechub.models.ranking import DeepFFM, FatDeepFFM
 
-# 创建模型
+# FFM 会为每个字段对使用不同 embedding，cross feature 的词表需乘以字段数
+ffm_linear_features = [
+    SparseFeature(f.name, vocab_size=f.vocab_size, embed_dim=1) for f in sparse_features
+]
+ffm_cross_features = [
+    SparseFeature(f.name, vocab_size=f.vocab_size * len(sparse_features), embed_dim=10)
+    for f in sparse_features
+]
+
 model = DeepFFM(
-    deep_features=sparse_features + dense_features,
-    fm_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    linear_features=ffm_linear_features,
+    cross_features=ffm_cross_features,
+    embed_dim=10,
+    mlp_params={"dims": [1600, 1600], "dropout": 0.5, "activation": "relu"},
 )
 
 # 创建 FatDeepFFM 模型（增强版本）
 fat_model = FatDeepFFM(
-    deep_features=sparse_features + dense_features,
-    fm_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    linear_features=ffm_linear_features,
+    cross_features=ffm_cross_features,
+    embed_dim=10,
+    reduction_ratio=1,
+    mlp_params={"dims": [1600, 1600], "dropout": 0.5, "activation": "relu"},
 )
 ```
 
@@ -375,9 +395,11 @@ fat_model = FatDeepFFM(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| fm_features | list | FFM 部分使用的特征列表 | None |
-| mlp_params | dict | 深度神经网络参数 | None |
+| linear_features | list | 一阶线性部分特征，通常 `embed_dim=1` | 必填 |
+| cross_features | list | FFM 交互特征，词表需预留字段偏移空间 | 必填 |
+| embed_dim | int | FFM embedding 维度 | 必填 |
+| reduction_ratio | int | 仅 FatDeepFFM 需要的 CEN 压缩比 | 必填（FatDeepFFM） |
+| mlp_params | dict | FFM 交互后的 MLP 参数 | 必填 |
 
 ### 适用场景
 
@@ -394,7 +416,7 @@ BST（Behavior Sequence Transformer）是一种使用 Transformer 建模用户�
 ### 论文引用
 
 ```
-Sun, Fei, et al. "BERT4Rec: Sequential recommendation with bidirectional encoder representations from transformer." Proceedings of the 28th ACM international conference on information and knowledge management. 2019.
+Chen, Qiwei, et al. "Behavior Sequence Transformer for E-commerce Recommendation in Alibaba." arXiv preprint arXiv:1905.06874 (2019).
 ```
 
 ### 核心原理
@@ -406,16 +428,30 @@ Sun, Fei, et al. "BERT4Rec: Sequential recommendation with bidirectional encoder
 ### 使用方法
 
 ```python
+from torch_rechub.basic.features import SparseFeature, SequenceFeature
 from torch_rechub.models.ranking import BST
 
-# 定义序列特征
-sequence_features = [SequenceFeature(name="user_history", vocab_size=10000, embed_dim=32, pooling="mean")]
+features = [SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)]
+target_features = [
+    SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
+    SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
+]
+history_features = [
+    SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8,
+                    pooling="concat", shared_with="target_item_id"),
+    SequenceFeature("hist_cate_id", vocab_size=n_cates + 1, embed_dim=8,
+                    pooling="concat", shared_with="target_cate_id"),
+]
 
-# 创建模型
 model = BST(
-    deep_features=sparse_features + dense_features,
-    sequence_features=sequence_features,
-    transformer_params={"num_heads": 4, "num_layers": 2, "hidden_size": 128, "dropout": 0.2}
+    features=features,
+    history_features=history_features,
+    target_features=target_features,
+    mlp_params={"dims": [256, 128]},
+    nhead=8,
+    dropout=0.2,
+    num_layers=1,
+    max_seq_len=51,
 )
 ```
 
@@ -423,9 +459,14 @@ model = BST(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| sequence_features | list | 序列特征列表 | None |
-| transformer_params | dict | Transformer 参数 | None |
+| features | list | 用户画像/上下文特征，不含历史和目标 | 必填 |
+| history_features | list | `pooling="concat"` 的历史序列 | 必填 |
+| target_features | list | 与历史特征对应的目标物品特征 | 必填 |
+| mlp_params | dict | 预测 MLP 参数 | 必填 |
+| nhead | int | 多头注意力头数，需整除历史特征维度总和 | 8 |
+| dropout | float | Transformer dropout | 0.2 |
+| num_layers | int | Transformer Encoder 层数 | 1 |
+| max_seq_len | int | 历史长度 + 1 个 target 的上限 | 51 |
 
 ### 适用场景
 
@@ -454,17 +495,22 @@ Zhou, Guorui, et al. "Deep interest network for click-through rate prediction." 
 ### 使用方法
 
 ```python
+from torch_rechub.basic.features import SparseFeature, SequenceFeature
 from torch_rechub.models.ranking import DIN
 
-# 定义序列特征
-sequence_features = [SequenceFeature(name="user_history", vocab_size=10000, embed_dim=32, pooling=None)]
+features = [SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)]
+target_features = [SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8)]
+history_features = [
+    SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8,
+                    pooling="concat", shared_with="target_item_id")
+]
 
-# 创建模型
 model = DIN(
-    deep_features=sparse_features + dense_features,
-    sequence_features=sequence_features,
-    target_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    features=features,
+    history_features=history_features,
+    target_features=target_features,
+    mlp_params={"dims": [256, 128]},
+    attention_mlp_params={"dims": [64, 32], "use_softmax": False},
 )
 ```
 
@@ -472,10 +518,11 @@ model = DIN(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| sequence_features | list | 序列特征列表 | None |
-| target_features | list | 目标特征列表 | None |
-| mlp_params | dict | 深度神经网络参数 | None |
+| features | list | 用户画像/上下文特征 | 必填 |
+| history_features | list | `pooling="concat"` 的历史序列 | 必填 |
+| target_features | list | 与历史特征数量、顺序和维度对应的目标特征 | 必填 |
+| mlp_params | dict | 预测 MLP 参数 | 必填 |
+| attention_mlp_params | dict | Activation Unit 参数 | 必填 |
 
 ### 适用场景
 
@@ -576,8 +623,12 @@ from torch_rechub.models.ranking import AutoInt
 
 # 创建模型
 model = AutoInt(
-    deep_features=sparse_features + dense_features,
-    attention_params={"num_heads": 4, "num_layers": 2, "hidden_size": 128, "dropout": 0.2}
+    sparse_features=sparse_features,
+    dense_features=dense_features,
+    num_layers=3,
+    num_heads=2,
+    dropout=0.2,
+    mlp_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
 )
 ```
 
@@ -585,8 +636,12 @@ model = AutoInt(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| deep_features | list | Deep 部分使用的特征列表 | None |
-| attention_params | dict | 注意力网络参数 | None |
+| sparse_features | list | 至少一个、且 `embed_dim` 相同的稀疏特征 | 必填 |
+| dense_features | list | 连续特征，可为空列表 | 必填 |
+| num_layers | int | Interacting Layer 层数 | 3 |
+| num_heads | int | 注意力头数 | 2 |
+| dropout | float | 注意力 dropout | 0.0 |
+| mlp_params | dict or None | 可选 Deep 分支参数 | None |
 
 ### 适用场景
 
@@ -620,6 +675,8 @@ model = AutoInt(
 ## 15. 代码示例：完整的排序模型训练流程
 
 ```python
+import os
+
 from torch_rechub.models.ranking import DeepFM
 from torch_rechub.trainers import CTRTrainer
 from torch_rechub.utils.data import DataGenerator
@@ -634,8 +691,8 @@ dense_features = [
 
 sparse_features = [
     SparseFeature(name="city", vocab_size=100, embed_dim=16),
-    SparseFeature(name="gender", vocab_size=3, embed_dim=8),
-    SparseFeature(name="occupation", vocab_size=20, embed_dim=12)
+    SparseFeature(name="gender", vocab_size=3, embed_dim=16),
+    SparseFeature(name="occupation", vocab_size=20, embed_dim=16)
 ]
 
 # 2. 准备数据
@@ -666,18 +723,19 @@ trainer = CTRTrainer(
     optimizer_params={"lr": 0.001, "weight_decay": 0.0001},
     n_epoch=50,
     earlystop_patience=10,
-    device="cuda:0",
+    device="cpu",
     model_path="saved/deepfm"
 )
 
 # 6. 训练模型
+os.makedirs("saved/deepfm", exist_ok=True)
 trainer.fit(train_dl, val_dl)
 
 # 7. 评估模型
 auc = trainer.evaluate(trainer.model, test_dl)
 print(f"Test AUC: {auc}")
 
-# 8. 导出 ONNX 模型
+# 8. 导出 ONNX 模型（先安装：pip install "torch-rechub[onnx]"）
 trainer.export_onnx("deepfm.onnx")
 ```
 
@@ -701,9 +759,4 @@ A: 可以尝试以下方法：
 - 分层 Embedding：对不同特征使用不同的 Embedding 维度
 
 ### Q: 如何加速模型训练？
-A: 可以尝试以下方法：
-- 使用 GPU 训练
-- 增加 batch size
-- 使用混合精度训练
-- 选择计算效率高的模型
-- 数据并行训练
+A: 当前 `CTRTrainer` 可通过 `device` 使用单卡 GPU，也可通过 `gpus=[...]` 在单机上包装 `torch.nn.DataParallel`。训练器没有内置自动混合精度（AMP）或多机分布式训练。batch size 是否能增大取决于显存，建议先从较小值逐步测试。

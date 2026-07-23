@@ -29,6 +29,8 @@ Huang, Po-Sen, et al. "Learning deep structured semantic models for web search u
 ### 使用方法
 
 ```python
+import os
+
 from torch_rechub.models.matching import DSSM
 from torch_rechub.basic.features import SparseFeature, DenseFeature
 
@@ -47,7 +49,7 @@ item_features = [
 model = DSSM(
     user_features=user_features,
     item_features=item_features,
-    temperature=0.02,
+    temperature=1.0,  # 当前 DSSM forward 尚未使用该参数
     user_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "prelu"},
     item_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "prelu"}
 )
@@ -59,7 +61,7 @@ model = DSSM(
 | --- | --- | --- | --- |
 | user_features | list | 用户特征列表 | None |
 | item_features | list | 物品特征列表 | None |
-| temperature | float | 温度参数，用于调整相似度分布 | 0.02 |
+| temperature | float | 保留参数；当前 DSSM `forward` 未将它应用到分数 | 1.0 |
 | user_params | dict | 用户塔网络参数 | None |
 | item_params | dict | 物品塔网络参数 | None |
 
@@ -90,9 +92,10 @@ from torch_rechub.models.matching import FaceBookDSSM
 # 创建模型
 model = FaceBookDSSM(
     user_features=user_features,
-    item_features=item_features,
+    pos_item_features=item_features,
+    neg_item_features=neg_item_features,
     user_params={"dims": [512, 256, 128], "dropout": 0.3, "activation": "relu"},
-    item_params={"dims": [512, 256, 128], "dropout": 0.3, "activation": "relu"}
+    item_params={"dims": [512, 256, 128], "dropout": 0.3, "activation": "relu"},
 )
 ```
 
@@ -101,9 +104,12 @@ model = FaceBookDSSM(
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
 | user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
+| pos_item_features | list | 正样本物品特征列表 | 必填 |
+| neg_item_features | list | 与正样本对应的负样本特征列表 | 必填 |
 | user_params | dict | 用户塔网络参数 | None |
-| item_params | dict | 物品塔网络参数 | None |
+| item_params | dict | 正负物品共用的物品塔参数 | None |
+
+`FaceBookDSSM.forward()` 返回 `(pos_score, neg_score)`，应配合 `MatchTrainer(mode=1)` 的 pair-wise/BPR 损失，不是 DSSM 的 point-wise 数据格式。
 
 ### 适用场景
 
@@ -151,6 +157,7 @@ item_features = [
 model = YoutubeDNN(
     user_features=user_features,
     item_features=item_features,
+    neg_item_feature=neg_item_feature,
     user_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
     temperature=0.02
 )
@@ -162,6 +169,7 @@ model = YoutubeDNN(
 | --- | --- | --- | --- |
 | user_features | list | 用户特征列表 | None |
 | item_features | list | 物品特征列表 | None |
+| neg_item_feature | list | 负样本 ID 序列，需使用 `pooling="concat"` 并与正样本 ID 共享 embedding | 必填 |
 | user_params | dict | 用户塔网络参数 | None |
 | temperature | float | 温度参数 | 0.02 |
 
@@ -199,8 +207,12 @@ from torch_rechub.models.matching import YoutubeSBC
 model = YoutubeSBC(
     user_features=user_features,
     item_features=item_features,
+    sample_weight_feature=sample_weight_feature,
     user_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    temperature=0.02
+    item_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
+    batch_size=256,
+    n_neg=3,
+    temperature=0.02,
 )
 ```
 
@@ -210,7 +222,11 @@ model = YoutubeSBC(
 | --- | --- | --- | --- |
 | user_features | list | 用户特征列表 | None |
 | item_features | list | 物品特征列表 | None |
+| sample_weight_feature | list | 用于采样偏差校正的物品采样权重特征 | 必填 |
 | user_params | dict | 用户塔网络参数 | None |
+| item_params | dict | 物品塔网络参数 | None |
+| batch_size | int | 必须与 DataLoader 的 batch size 一致 | 必填 |
+| n_neg | int | 每个正样本的 batch 内负样本数，必须小于 batch size | 3 |
 | temperature | float | 温度参数 | 0.02 |
 
 ### 适用场景
@@ -243,19 +259,25 @@ Chen, Jiaxi, et al. "Multi-interest network with dynamic routing for recommendat
 ```python
 from torch_rechub.models.matching import MIND
 
-# 定义序列特征
-user_features = [
-    SequenceFeature(name="user_history", vocab_size=100000, embed_dim=32, pooling=None),
-    SparseFeature(name="user_id", vocab_size=10000, embed_dim=16)
+user_features = [SparseFeature("user_id", vocab_size=10000, embed_dim=16)]
+history_features = [
+    SequenceFeature("hist_item_id", vocab_size=100000, embed_dim=16,
+                    pooling="concat", shared_with="item_id")
+]
+item_features = [SparseFeature("item_id", vocab_size=100000, embed_dim=16)]
+neg_item_feature = [
+    SequenceFeature("neg_items", vocab_size=100000, embed_dim=16,
+                    pooling="concat", shared_with="item_id")
 ]
 
 # 创建模型
 model = MIND(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    user_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
-    n_items=100000,
-    n_interest=4,  # 学习的兴趣数量
+    neg_item_feature=neg_item_feature,
+    max_length=50,
+    interest_num=4,
     temperature=0.02
 )
 ```
@@ -264,11 +286,12 @@ model = MIND(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| user_params | dict | 用户塔网络参数 | None |
-| n_items | int | 物品总数 | None |
-| n_interest | int | 学习的兴趣数量 | 4 |
+| user_features | list | 非序列用户特征 | 必填 |
+| history_features | list | `pooling="concat"` 的历史物品序列 | 必填 |
+| item_features | list | 正样本物品 ID 特征 | 必填 |
+| neg_item_feature | list | `pooling="concat"` 的负样本 ID 序列 | 必填 |
+| max_length | int | 输入历史序列的固定长度 | 必填 |
+| interest_num | int | 学习的兴趣数量 | 4 |
 | temperature | float | 温度参数 | 0.02 |
 
 ### 适用场景
@@ -309,12 +332,11 @@ user_features = [
 # 创建模型
 model = GRU4Rec(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    embedding_dim=32,
-    hidden_size=64,
-    num_layers=2,
-    dropout=0.2,
-    temperature=0.02
+    neg_item_feature=neg_item_feature,
+    user_params={"dims": [128, 64, 16], "dropout": 0.2},
+    temperature=0.02,
 )
 ```
 
@@ -323,12 +345,13 @@ model = GRU4Rec(
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
 | user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| hidden_size | int | GRU 隐藏层大小 | 64 |
-| num_layers | int | GRU 层数 | 2 |
-| dropout | float | Dropout 率 | 0.2 |
+| history_features | list | `pooling="concat"` 的历史序列；当前实现只使用第一个序列 | 必填 |
+| item_features | list | 正样本物品 ID 特征 | 必填 |
+| neg_item_feature | list | `pooling="concat"` 的负样本 ID 序列 | 必填 |
+| user_params | dict | 用户 MLP 参数，最后一层需与 item embedding 维度一致 | 必填 |
 | temperature | float | 温度参数 | 0.02 |
+
+> 当前 `GRU4Rec.forward()` 的 list-wise 求和维度与候选物品轴不一致，不建议把这一节的构造片段当作稳定的可训练教程；待实现修正后应配合 list-wise 数据使用。
 
 ### 适用场景
 
@@ -362,13 +385,11 @@ from torch_rechub.models.matching import NARM
 
 # 创建模型
 model = NARM(
-    user_features=user_features,
-    item_features=item_features,
-    embedding_dim=32,
-    hidden_size=64,
-    num_layers=1,
-    dropout=0.2,
-    temperature=0.02
+    item_history_feature=item_history_feature,
+    hidden_dim=64,
+    emb_dropout_p=0.2,
+    session_rep_dropout_p=0.2,
+    item_feature=item_feature,  # 仅在 batch 内负采样/物品塔推理时需要
 )
 ```
 
@@ -376,13 +397,11 @@ model = NARM(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| hidden_size | int | GRU 隐藏层大小 | 64 |
-| num_layers | int | GRU 层数 | 1 |
-| dropout | float | Dropout 率 | 0.2 |
-| temperature | float | 温度参数 | 0.02 |
+| item_history_feature | SequenceFeature | 会话 item 序列，0 为 padding | 必填 |
+| hidden_dim | int | GRU 隐藏维度 | 必填 |
+| emb_dropout_p | float | item embedding dropout | 必填 |
+| session_rep_dropout_p | float | 会话表示 dropout | 必填 |
+| item_feature | SparseFeature or None | 可选的目标 item ID，用于独立 item tower/批内负采样 | None |
 
 ### 适用场景
 
@@ -416,14 +435,11 @@ from torch_rechub.models.matching import SASRec
 
 # 创建模型
 model = SASRec(
-    user_features=user_features,
-    item_features=item_features,
-    embedding_dim=32,
+    features=[seq_feature, pos_feature, neg_feature],
+    max_len=50,
+    dropout_rate=0.2,
+    num_blocks=2,
     num_heads=4,
-    num_layers=2,
-    hidden_size=128,
-    dropout=0.2,
-    temperature=0.02
 )
 ```
 
@@ -431,14 +447,14 @@ model = SASRec(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| num_heads | int | 注意力头数 | 4 |
-| num_layers | int | Transformer 层数 | 2 |
-| hidden_size | int | 隐藏层大小 | 128 |
-| dropout | float | Dropout 率 | 0.2 |
-| temperature | float | 温度参数 | 0.02 |
+| features | list | 顺序固定为历史序列、正样本序列、负样本序列，同为 `SequenceFeature` | 必填 |
+| max_len | int | 序列长度 | 50 |
+| dropout_rate | float | Embedding/注意力/FFN dropout | 0.5 |
+| num_blocks | int | Self-Attention block 数 | 2 |
+| num_heads | int | 注意力头数，需整除 embedding 维度 | 1 |
+| item_feature | SparseFeature or None | 实验性的独立 item tower 特征 | None |
+
+> 当前 SASRec 在 `forward` 中构造 CPU mask/position，而 `item_feature` 分支还访问了不存在的 embedding 属性；因此本页只列出源码中的真实构造接口，不将 GPU 或 item-tower 路径声明为可用。
 
 ### 适用场景
 
@@ -472,14 +488,16 @@ from torch_rechub.models.matching import SINE
 
 # 创建模型
 model = SINE(
-    user_features=user_features,
-    item_features=item_features,
+    history_features=["hist_item_id"],
+    item_features=["item_id"],
+    neg_item_features=["neg_items"],
+    num_items=100000,
     embedding_dim=32,
+    hidden_dim=64,
+    num_concept=100,
+    num_intention=4,
+    seq_max_len=50,
     num_heads=4,
-    num_layers=2,
-    hidden_size=128,
-    dropout=0.2,
-    n_interest=4,
     temperature=0.02
 )
 ```
@@ -488,14 +506,16 @@ model = SINE(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| num_heads | int | 注意力头数 | 4 |
-| num_layers | int | Transformer 层数 | 2 |
-| hidden_size | int | 隐藏层大小 | 128 |
-| dropout | float | Dropout 率 | 0.2 |
-| n_interest | int | 兴趣数量 | 4 |
+| history_features | list[str] | 历史 item 序列字段名；当前只使用第一个 | 必填 |
+| item_features | list[str] | 正样本 item 字段名 | 必填 |
+| neg_item_features | list[str] | 负样本 item 序列字段名 | 必填 |
+| num_items | int | 包含 padding 的 item 词表大小 | 必填 |
+| embedding_dim | int | Embedding 维度 | 必填 |
+| hidden_dim | int | 注意力隐藏维度 | 必填 |
+| num_concept | int | 全局概念原型数 | 必填 |
+| num_intention | int | 每个用户选取的意图数 | 必填 |
+| seq_max_len | int | 输入固定序列长度 | 必填 |
+| num_heads | int | 自注意力头数 | 1 |
 | temperature | float | 温度参数 | 0.02 |
 
 ### 适用场景
@@ -530,12 +550,10 @@ from torch_rechub.models.matching import STAMP
 
 # 创建模型
 model = STAMP(
-    user_features=user_features,
-    item_features=item_features,
-    embedding_dim=32,
-    hidden_size=128,
-    dropout=0.2,
-    temperature=0.02
+    item_history_feature=item_history_feature,
+    weight_std=0.05,
+    emb_std=0.05,
+    item_feature=item_feature,  # 仅在 batch 内负采样/物品塔推理时需要
 )
 ```
 
@@ -543,12 +561,10 @@ model = STAMP(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| hidden_size | int | 隐藏层大小 | 128 |
-| dropout | float | Dropout 率 | 0.2 |
-| temperature | float | 温度参数 | 0.02 |
+| item_history_feature | SequenceFeature | 会话 item 序列，0 为 padding | 必填 |
+| weight_std | float | 注意力参数初始化标准差 | 必填 |
+| emb_std | float | Embedding/线性层初始化标准差 | 必填 |
+| item_feature | SparseFeature or None | 可选的目标 item ID，用于 item tower/批内负采样 | None |
 
 ### 适用场景
 
@@ -583,13 +599,12 @@ from torch_rechub.models.matching import ComirecDR
 # 创建模型
 model = ComirecDR(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    embedding_dim=32,
-    hidden_size=128,
-    num_layers=2,
-    n_interest=4,
-    dropout=0.2,
-    temperature=0.02
+    neg_item_feature=neg_item_feature,
+    max_length=50,
+    interest_num=4,
+    temperature=0.02,
 )
 ```
 
@@ -597,13 +612,12 @@ model = ComirecDR(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| hidden_size | int | 隐藏层大小 | 128 |
-| num_layers | int | 层数 | 2 |
-| n_interest | int | 兴趣数量 | 4 |
-| dropout | float | Dropout 率 | 0.2 |
+| user_features | list | 非序列用户特征 | 必填 |
+| history_features | list | `pooling="concat"` 的历史 item 序列 | 必填 |
+| item_features | list | 正样本 item 特征 | 必填 |
+| neg_item_feature | list | `pooling="concat"` 的负样本 item 序列 | 必填 |
+| max_length | int | 固定历史序列长度 | 必填 |
+| interest_num | int | 兴趣数量 | 4 |
 | temperature | float | 温度参数 | 0.02 |
 
 ### 适用场景
@@ -633,14 +647,11 @@ from torch_rechub.models.matching import ComirecSA
 # 创建模型
 model = ComirecSA(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    embedding_dim=32,
-    num_heads=4,
-    num_layers=2,
-    hidden_size=128,
-    n_interest=4,
-    dropout=0.2,
-    temperature=0.02
+    neg_item_feature=neg_item_feature,
+    interest_num=4,
+    temperature=0.02,
 )
 ```
 
@@ -648,14 +659,11 @@ model = ComirecSA(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| embedding_dim | int | Embedding 维度 | 32 |
-| num_heads | int | 注意力头数 | 4 |
-| num_layers | int | Transformer 层数 | 2 |
-| hidden_size | int | 隐藏层大小 | 128 |
-| n_interest | int | 兴趣数量 | 4 |
-| dropout | float | Dropout 率 | 0.2 |
+| user_features | list | 非序列用户特征 | 必填 |
+| history_features | list | `pooling="concat"` 的历史 item 序列 | 必填 |
+| item_features | list | 正样本 item 特征 | 必填 |
+| neg_item_feature | list | `pooling="concat"` 的负样本 item 序列 | 必填 |
+| interest_num | int | 兴趣数量 | 4 |
 | temperature | float | 温度参数 | 0.02 |
 
 ### 适用场景
@@ -704,6 +712,8 @@ model = ComirecSA(
 ## 15. 代码示例：完整的召回模型训练流程
 
 ```python
+import os
+
 from torch_rechub.models.matching import DSSM
 from torch_rechub.trainers import MatchTrainer
 from torch_rechub.utils.data import MatchDataGenerator
@@ -757,7 +767,7 @@ train_dl, test_dl, item_dl = dg.generate_dataloader(
 model = DSSM(
     user_features=user_features,
     item_features=item_features,
-    temperature=0.02,
+    temperature=1.0,  # 当前 DSSM forward 尚未使用该参数
     user_params={"dims": [256, 128, 64], "activation": "prelu"},
     item_params={"dims": [256, 128, 64], "activation": "prelu"}
 )
@@ -769,14 +779,16 @@ trainer = MatchTrainer(
     optimizer_params={"lr": 0.001, "weight_decay": 0.0001},
     n_epoch=50,
     earlystop_patience=10,
-    device="cuda:0",
+    device="cpu",
     model_path="saved/dssm"
 )
 
 # 6. 训练模型
-trainer.fit(train_dl, test_dl)
+os.makedirs("saved/dssm", exist_ok=True)
+# test_dl / item_dl 是无标签的向量推理 DataLoader，不能作为验证集传给 fit
+trainer.fit(train_dl)
 
-# 7. 导出ONNX模型
+# 7. 导出 ONNX 模型（先安装：pip install "torch-rechub[onnx]"）
 # 导出用户塔
 trainer.export_onnx("user_tower.onnx", mode="user")
 # 导出物品塔
@@ -790,6 +802,7 @@ item_embeddings = trainer.inference_embedding(model, mode="item", data_loader=it
 
 # 使用 Annoy 或 Faiss 进行向量索引和召回
 # 这里以 Annoy 为例
+# 先安装：pip install "torch-rechub[annoy]"
 from annoy import AnnoyIndex
 
 # 创建索引
@@ -803,6 +816,7 @@ user_idx = 0
 user_emb = user_embeddings[user_idx].tolist()
 recall_results = index.get_nns_by_vector(user_emb, 10)  # 召回 top 10 物品
 print(f"User {user_idx} 召回的物品: {recall_results}")
+```
 
 ## 16. 常见问题与解决方案
 

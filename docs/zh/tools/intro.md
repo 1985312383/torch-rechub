@@ -14,6 +14,7 @@ Torch-RecHub 提供了丰富的研发工具，帮助开发者更高效地进行�
 | **回调函数** | 训练过程中的早停、模型保存等 | [回调函数](/zh/tools/callbacks) |
 | **实验追踪** | WandB、SwanLab、TensorBoardX 集成 | [实验追踪](/zh/tools/tracking) |
 | **模型可视化** | 模型架构图生成与展示 | [可视化监控](/zh/tools/visualization) |
+| **Benchmark** | 固定协议的模型对比与基线回归 | [Benchmark](/zh/tools/benchmark) |
 
 ## 回调函数
 
@@ -127,7 +128,7 @@ loss = hinge_loss(pos_score, neg_score)
 
 ### NCELoss
 
-噪声对比估计损失，用于生成式推荐模型。
+对全量类别 logits 做温度缩放与 log-softmax 的分类损失，用于当前生成式推荐训练器。尽管类名为 `NCELoss`，当前实现不采样噪声，也不会自动构造 in-batch negatives。
 
 ```python
 from torch_rechub.basic.loss_func import NCELoss
@@ -141,4 +142,5 @@ loss = nce_loss(logits, targets)
 - 了解 [回调函数](/zh/tools/callbacks) 的详细用法
 - 了解 [实验追踪](/zh/tools/tracking) 的配置方法
 - 了解 [可视化监控](/zh/tools/visualization) 的使用方式
+- 使用 [Benchmark](/zh/tools/benchmark) 做可复现实验与回归检测
 

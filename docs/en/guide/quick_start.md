@@ -106,7 +106,7 @@ trainer = CTRTrainer(
 os.makedirs("./saved/quick_start_deepfm", exist_ok=True)
 trainer.fit(train_dl, val_dl)
 
-# It is safer to evaluate trainer.model so you use the best validated checkpoint.
+# evaluate() requires the model to evaluate explicitly.
 auc = trainer.evaluate(trainer.model, test_dl)
 print(f"Test AUC: {auc:.4f}")
 ```
@@ -115,7 +115,7 @@ If you prefer running the full example script directly, you can also execute:
 
 ```bash
 cd examples/ranking
-python run_criteo.py --model_name deepfm --epoch 2 --device cuda:0
+python run_criteo.py --model_name deepfm --epoch 2 --device cpu
 ```
 
 ---
@@ -267,7 +267,7 @@ If you prefer running the example script directly, you can also execute:
 
 ```bash
 cd examples/matching
-python run_ml_dssm.py --epoch 2 --device cuda:0
+python run_ml_dssm.py --epoch 2 --device cpu
 ```
 
 If you hit DataLoader multiprocessing issues in Windows or notebook environments, it is better to run the Python code block above directly, because the script does not currently expose a `num_workers` argument while retrieval examples often need `num_workers=0`.
@@ -318,5 +318,5 @@ trainer.export_onnx("item_tower.onnx", mode="item")
 
 ```bash
 cd examples/ranking
-python run_criteo.py --model_name deepfm --epoch 1 --device cuda:0
+python run_criteo.py --model_name deepfm --epoch 1 --device cpu
 ```

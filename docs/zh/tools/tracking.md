@@ -16,7 +16,7 @@ torch-rechub 内置了可选的实验跟踪能力，支持：
 
 ```bash
 # 安装全部
-pip install torch-rechub[tracking]
+pip install "torch-rechub[tracking]"
 
 # 或按需
 pip install wandb
@@ -57,13 +57,23 @@ sb = SwanLabLogger(project="my-ctr")
 trainer = CTRTrainer(model, model_logger=[tb, wb, sb])
 ```
 
-### 代码中设置 API key
+### 配置 API key
 
-```python
-import os
-os.environ['WANDB_API_KEY'] = "your API_KEY"
-os.environ['SWANLAB_API_KEY'] = "your API_KEY"
+```bash
+# bash/zsh：仅在当前 shell 中设置
+export WANDB_API_KEY="..."
+export SWANLAB_API_KEY="..."
 ```
+
+```powershell
+# PowerShell：仅在当前会话中设置
+$env:WANDB_API_KEY = "..."
+$env:SWANLAB_API_KEY = "..."
+```
+
+也可以使用各平台登录命令或密钥管理服务。
+
+不要把真实 API key 硬编码或提交到仓库。
 
 ### 不记录时的开销
 
@@ -151,7 +161,7 @@ class BaseLogger:
 
 **WandbLogger**
 
-```python
+```text
 WandbLogger(
     project: str,              # 项目名称（必填）
     name: str = None,          # 运行名称
@@ -165,7 +175,7 @@ WandbLogger(
 
 **SwanLabLogger**
 
-```python
+```text
 SwanLabLogger(
     project: str = None,           # 项目名称
     experiment_name: str = None,   # 实验名称
@@ -178,7 +188,7 @@ SwanLabLogger(
 
 **TensorBoardXLogger**
 
-```python
+```text
 TensorBoardXLogger(
     log_dir: str,          # 日志目录（必填）
     comment: str = "",     # 目录名后缀
@@ -189,15 +199,10 @@ TensorBoardXLogger(
 ## 完整示例
 
 ```python
-import os
 import torch
 from torch_rechub.models.ranking import DeepFM
 from torch_rechub.trainers import CTRTrainer
 from torch_rechub.basic.tracking import WandbLogger, SwanLabLogger, TensorBoardXLogger
-
-# 设置 API key（可选，也可通过命令行登录）
-os.environ['WANDB_API_KEY'] = "your_key"
-os.environ['SWANLAB_API_KEY'] = "your_key"
 
 # 配置
 SEED = 2022

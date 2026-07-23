@@ -9,7 +9,7 @@ Torch-RecHub provides model architecture visualization to help developers intuit
 
 ## Why torchview
 
-Torch-RecHub uses [torchview](https://github.com/mert-kurttutan/torchview) as the visualization backend instead of other common solutions (e.g., torchviz, netron). **The core reason is: torchview is the only visualization tool that supports complex dictionary inputs**.
+Torch-RecHub uses [torchview](https://github.com/mert-kurttutan/torchview) as its visualization backend. The project's wrapper passes the feature dictionary to the model as one positional argument, so it can trace the dictionary inputs commonly used by recommendation models.
 
 Recommendation model inputs are typically dictionaries containing multiple feature types:
 
@@ -23,21 +23,21 @@ x = {
 model(x)  # Dictionary as input
 ```
 
-Other visualization tools (torchviz, netron, etc.) only support simple Tensor inputs and cannot handle this dictionary-based complex input structure.
+torchviz is based on the autograd graph, while Netron primarily inspects an already exported static model. These tools serve different purposes; the distinction cannot be reduced to whether they "support dictionaries."
 
 > **Tip**: If you have exported your model to ONNX format, you can also use [Netron](https://netron.app/) to view the model structure online. See [ONNX Export Documentation](/serving/onnx).
 
 | Feature | torchview | torchviz | netron |
 |---------|-----------|----------|--------|
-| **Dictionary input support** | ✅ | ❌ | ❌ (requires ONNX export) |
+| **This project's dictionary-input wrapper** | ✅ | Requires a custom wrapper | Requires model export first |
 | Forward pass tracing | ✅ | ❌ (autograd-based) | ❌ (static parsing) |
-| Dynamic control flow | ✅ | ❌ | ❌ |
+| Shows one actually executed path | ✅ | ✅ | ❌ (static parsing) |
 | Show tensor shapes | ✅ | ❌ | ✅ |
 | Adjustable depth | ✅ | ❌ | ❌ |
 | Nested module expansion | ✅ | ❌ | Partial |
 
 **Other advantages**:
-- **Forward tracing**: Traces forward pass via hooks, accurately capturing dynamic structures like attention mechanisms and multi-tower architectures
+- **Forward tracing**: Captures the modules traversed by this input during one forward pass; control-flow branches that are not executed do not appear in the graph
 - **Depth control**: Flexibly control display granularity via `depth` parameter
 - **Shape visualization**: Intuitively display tensor shapes at each layer
 
@@ -46,7 +46,7 @@ Other visualization tools (torchviz, netron, etc.) only support simple Tensor in
 Visualization requires additional dependencies:
 
 ```bash
-pip install torch-rechub[visualization]
+pip install "torch-rechub[visualization]"
 ```
 
 Also install system-level graphviz:
@@ -127,22 +127,11 @@ Display computation graph in Jupyter.
 ```python
 from torch_rechub.utils.visualization import display_graph
 
+# Get the computation graph
 graph = visualize_model(model, depth=4)
+
+# Display it in Jupyter
 display_graph(graph, format='png')
-```
-
-## Usage via Trainer
-
-Trainers also provide visualization methods:
-
-```python
-from torch_rechub.trainers import CTRTrainer
-
-trainer = CTRTrainer(model)
-trainer.fit(train_dl, val_dl)
-
-# Visualize model
-trainer.visualization(save_path="model.pdf", depth=4)
 ```
 
 ## Usage Examples
@@ -158,7 +147,8 @@ from torch_rechub.basic.features import DenseFeature, SparseFeature
 dense_features = [DenseFeature("age"), DenseFeature("income")]
 sparse_features = [
     SparseFeature("city", vocab_size=100, embed_dim=16),
-    SparseFeature("gender", vocab_size=3, embed_dim=8)
+    # Sparse features used in FM interactions must share the same embedding dimension
+    SparseFeature("gender", vocab_size=3, embed_dim=16)
 ]
 
 # Create model
@@ -187,6 +177,20 @@ model = DSSM(
 )
 
 visualize_model(model, depth=3, save_path="dssm_arch.png", dpi=300)
+```
+
+### Visualization via Trainer
+
+Trainers also provide a visualization method:
+
+```python
+from torch_rechub.trainers import CTRTrainer
+
+trainer = CTRTrainer(model)
+trainer.fit(train_dl, val_dl)
+
+# Visualize model
+trainer.visualization(save_path="model.pdf", depth=4)
 ```
 
 ## Output Formats

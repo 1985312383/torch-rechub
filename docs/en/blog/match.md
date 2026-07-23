@@ -1,31 +1,33 @@
 ---
-title: Matching Models Training Guide
-description: Comprehensive guide on loss functions, similarity metrics, and temperature scaling for matching models
+title: Matching Model Training Guide
+description: A complete guide to loss functions, similarity metrics, and temperature scaling for matching models
 ---
 
-## I. Understanding Different Loss Functions — 3 Training Methods
+# Matching Model Training Guide
 
-In recall tasks, there are generally three training methods: point-wise, pair-wise, and list-wise. In RecHub, we use the ***mode*** parameter to specify the training method, with each method corresponding to a different loss function.
+## I. So Many Losses? — Three Training Approaches
 
-#### 1.1 Point-wise (mode = 0)
+Matching models generally use one of three training approaches: point-wise, pair-wise, or list-wise. In RecHub, the ***mode*** parameter selects the training approach, and each approach corresponds to a different loss.
 
-> 🥰**Core Idea: Treat recall as binary classification.**
+### 1.1 Point-wise (mode = 0)
 
-For a recall model, the input is a tuple \<User, Item>, and the output is $P(User, Item)$, representing the user's interest level in the item.
+> 🥰**Core idea: Treat matching as binary classification.**
 
-Training objective: For positive samples, the output should be as close to 1 as possible; for negative samples, as close to 0 as possible.
+For a matching model, the input is a tuple \<User, Item>, and the output is $P(User, Item)$, representing the user's degree of interest in the item.
 
-The most commonly used loss function is BCELoss (Binary Cross Entropy Loss).
+The training objective is to make the output as close to 1 as possible for a positive item and as close to 0 as possible for a negative item.
 
-#### 1.2 Pair-wise (mode = 1)
+The most common loss is BCELoss (Binary Cross Entropy Loss).
 
-> 😝**Core Idea: A user's interest in positive samples should be higher than in negative samples.**
+### 1.2 Pair-wise (mode = 1)
 
-For a recall model, the input is a triple \<User, ItemPositive, ItemNegative\>, outputting interest scores $P(User, ItemPositive)$ and $P(User, ItemNegative)$, representing the user's interest scores for positive and negative item samples.
+> 😝**Core idea: A user's interest in a positive sample should be greater than their interest in a negative sample.**
 
-Training objective: The interest score for positive samples should be higher than that for negative samples.
+For a matching model, the input is a triple \<User, ItemPositive, ItemNegative\>. It outputs the interest scores $P(User, ItemPositive)$ and $P(User, ItemNegative)$, representing the user's interest in the positive and negative items.
 
-The framework uses BPRLoss (Bayes Personalized Ranking Loss). Here's the loss formula (for more details, see [here](https://www.cnblogs.com/pinard/p/9128682.html "here") - note that there are slight differences between the linked content and the formula below, but the core idea remains the same):
+The training objective is to make the positive sample's interest score as much greater than the negative sample's score as possible.
+
+The framework uses BPRLoss (Bayes Personalized Ranking Loss). The formula is shown below; see [this article](https://www.cnblogs.com/pinard/p/9128682.html "here") for details. The linked formulation differs slightly from the formula below, but the underlying idea is the same.
 
 $$
 Loss=\frac{1}{N}\sum^N\ _{i=1}-log(sigmoid(pos\_score - neg\_score))
@@ -33,55 +35,55 @@ $$
 
 ***
 
-#### 1.3 List-wise (mode = 2)
+### 1.3 List-wise (mode = 2)
 
-> 😇**Core Idea: A user's interest in positive samples should be higher than in negative samples.**
+> 😇**Core idea: A user's interest in a positive sample should be greater than their interest in negative samples.**
 
-Wait, isn't this the same as Pair-wise?
+Isn't that the same as Pair-wise?
 
-Yes! The core idea of List-wise training is the same as Pair-wise, but the implementation differs.
+Yes! List-wise training follows the same idea as Pair-wise training, but the implementation differs.
 
-For a recall model, the input is an N+2 tuple $<User, ItemPositive, ItemNeg\_1, ... , ItemNeg\_N>$, outputting interest scores for 1 positive sample and N negative samples.
+For a matching model, the input is an N+2 tuple $<User, ItemPositive, ItemNeg\_1, ... , ItemNeg\_N>$. It outputs the user's interest scores for one positive sample and N negative samples.
 
-Training objective: The interest score for the positive sample should be higher than all negative samples.
+The training objective is to make the positive sample's interest score as much greater as possible than the scores of all negative samples.
 
-The framework uses $torch.nn.CrossEntropyLoss$, applying Softmax to the outputs.
+The framework uses `torch.nn.CrossEntropyLoss`. The model should output unnormalized logits; the loss combines `LogSoftmax` and `NLLLoss` internally, and the label is the position of the positive sample in the candidate list.
 
-> PS: This List-wise approach can be easily confused with List-wise in Ranking. Although they share the same name, List-wise in ranking considers the order relationship between samples. For example, ranking uses order-sensitive metrics like MAP and NDCG for evaluation, while List-wise in Matching doesn't consider order.
+> PS: This use of List-wise can easily be confused with listwise learning in ranking. The latter typically optimizes or approximates an objective over an ordered list and is evaluated with order-sensitive metrics such as MAP and NDCG. Here, the task is instead multiclass classification among one positive and several negative samples.
 
-## II. How Far Apart Are Two Vectors? — 3 Similarity Metrics
+## II. How Far Apart Are Two Vectors? — Three Metrics
 
-> 🤔Given a user vector and an item vector, how do we measure their similarity?
+> 🤔Given a user vector and an item vector, how should their similarity be measured?
 
-Let's first define user vector $user \in \mathcal R^D$ and item vector $item\in \mathcal R^D$, where D represents their dimension.
+First define a user vector $user \in \mathcal R^D$ and an item vector $item\in \mathcal R^D$, where D is the dimensionality of both vectors.
 
 ### 2.1 Cosine
 
-From middle school math:
+From basic geometry:
 
 $$
 cos(a,b)=\frac{<a,b>}{|a|*|b|}
 $$
 
-This represents the angle between two vectors, outputting a real number between \[-1, 1]. We can use this as a similarity measure: the smaller the angle between vectors, the more similar they are.
+This represents the angle between two vectors and returns a real number in \[-1, 1]. It can therefore serve as a similarity measure: the smaller the angle between the vectors, the more similar they are.
 
-In all two-tower models in RecHub, cosine similarity is used during the training phase.
+RecHub implementations such as DSSM, YouTubeDNN, MIND, ComiRec, and GRU4Rec L2-normalize the tower outputs and then use their inner product as cosine similarity. Other sequential matching implementations do not all follow exactly the same output convention. When integrating a custom model or switching architectures, consult the corresponding `forward()` method.
 
 ### 2.2 Dot Product
 
-This is the inner product of vectors, denoted as $<a,b>$ for vectors a and b.
+This is the inner product of two vectors, written as $<a,b>$ for vectors a and b.
 
-A simple insight: **If we L2 normalize vectors a and b, i.e., $\tilde{a}=\frac{a}{|a|}\ ,\tilde{b}=\frac{b}{|b|}$, then computing their dot product is equivalent to $cos(a,b)$**. (This is straightforward, so we'll skip the proof)
+A simple observation is that **if a and b are L2-normalized, i.e. $\tilde{a}=\frac{a}{|a|}\ ,\tilde{b}=\frac{b}{|b|}$, directly taking the inner product of $\tilde{a}$ and $\tilde{b}$ is equivalent to $cos(a,b)$**. (The proof is straightforward and omitted here.)
 
-In fact, this is exactly how all two-tower models in RecHub work: first computing User Embedding and Item Embedding, then applying L2 Norm to each, and finally computing their dot product to get cosine similarity. This approach improves model validation and inference speed.
+Several current two-tower and multi-interest implementations use this pattern: compute user/item embeddings, L2-normalize them separately, and then take their inner product. This avoids repeatedly computing vector norms explicitly and makes retrieval with angular/IP indexes convenient, but it is not a universal guarantee across every matching model in the repository.
 
 ### 2.3 Euclidean Distance
 
-Euclidean distance is what we commonly understand as "distance" in everyday life.
+Euclidean distance is the ordinary meaning of “distance” in everyday life.
 
-> 🙋**For L2 normalized vectors a and b, maximizing their cosine similarity is equivalent to minimizing their Euclidean distance**
+> 🙋**For L2-normalized vectors a and b, maximizing cosine similarity is equivalent to minimizing Euclidean distance.**
 
-Why? See the formula below:
+Why? Consider the following formula:
 
 $$
 \begin{align*}
@@ -92,35 +94,35 @@ $$
 \end{align*}
 $$
 
-Two points to explain:
+Two details explain the derivation:
 
-1. From second line to third line, $\sum\ _{i=1}^N a\_i^2=1$. Why? Because a is L2 normalized. Same for b.
-2. From third line to fourth line, $\sum_{i=1}^Na_i*b_i$ is the dot product of vectors a and b; since they're L2 normalized, this equals cos.
+1. From the second line to the third, $\sum\ _{i=1}^N a\_i^2=1$ because a is L2-normalized. The same applies to b.
+2. From the third line to the fourth, $\sum_{i=1}^Na_i*b_i$ is the inner product of a and b. Because both are L2-normalized, it is equivalent to cosine similarity.
 
-In RecHub, we use Annoy's Euclidean distance during the validation phase.
+The legacy matching evaluation utility `torch_rechub.utils.match.Annoy` uses the `angular` metric by default, not `euclidean`. For L2-normalized vectors, angular distance is monotonically related to cosine similarity. If you explicitly switch the backend or metric, keep the training score and retrieval metric consistent.
 
-> 🙋**Summary: For L2 normalized vectors, maximizing dot product is equivalent to maximizing cosine similarity is equivalent to minimizing Euclidean distance**
+> 🙋**Summary: For two L2-normalized vectors, max dot is equivalent to max cosine, which is equivalent to min EuclideanDistance.**
 
-## III. How Hot is the Temperature?
+## III. How Hot Is the Temperature?
 
-> Before proceeding, please make sure you understand the operations in [torch.nn.CrossEntropyLoss](https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html) (LogSoftmax + NLLLoss). This is crucial for understanding the source code.
+> Before continuing, make sure you understand the operations performed by [torch.nn.CrossEntropyLoss](https://blog.csdn.net/sdutstudent/article/details/116097064 "torch.nn.CrossEntropyLoss") (LogSoftmax + NLLLoss), which is also essential for reading the source code. Here is the [official documentation](https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html "official documentation").
 
-Consider a scenario: Using List-wise training with 1 positive sample and 3 negative samples, with cosine similarity as the training metric.
+Consider a List-wise training scenario with one positive sample, three negative samples, and cosine similarity as the training metric.
 
-Suppose our model perfectly predicts a training sample, outputting logits (1, -1, -1, -1). Theoretically, the Loss should be 0, or at least very small. However, with CrossEntropyLoss, we get:
+Suppose the model perfectly predicts a training example and outputs logits of (1, -1, -1, -1). In principle, the Loss should be 0, or at least very small. With CrossEntropyLoss, however, the Loss is:
 
 $$
 -log(exp(1)/(exp(1)+exp(-1)*3))=0.341
 $$
 
-But if we divide the logits by a temperature coefficient $temperature=0.2$, making them (5, -5, -5, -5), after CrossEntropyLoss, we get:
+If instead the logits are divided by a temperature coefficient $temperature=0.2$, they become (5, -5, -5, -5). CrossEntropyLoss then gives:
 
 $$
 -log(exp(5)/(exp(5)+exp(-5)*3))=0.016
 $$
 
-This gives us a negligibly small Loss.
+This produces a negligibly small Loss.
 
-In other words, **dividing logits by a temperature expands the upper and lower bounds of each element in the logits, bringing them back into the sensitive range of softmax operations**.
+In other words, **dividing logits by a temperature expands the upper and lower bounds of their elements and brings them back into the sensitive range of the softmax operation**.
 
-In practice, L2 Norm is commonly used together with temperature scaling.
+L2 normalization is commonly paired with temperature scaling, but whether the temperature is actually applied depends on the model. DSSM-SENet and YouTubeDNN, for example, scale their logits, while the base DSSM currently retains the argument without applying it in `forward()`. Do not assume that temperature participates in training merely because a constructor exposes a `temperature` argument.

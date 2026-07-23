@@ -17,7 +17,7 @@ description: Overview of Torch-RecHub project architecture, features, and design
 * **Based on PyTorch:** Leverage PyTorch's dynamic graph and hardware acceleration capabilities across CPU, NVIDIA CUDA GPU, AMD ROCm GPU, and Huawei Ascend NPU.
 * **Rich Model Library:** Includes various classic and cutting-edge recommendation algorithms.
 * **Standardized Process:** Provide unified data loading, training, and evaluation processes.
-* **Easy to Configure:** Easily adjust experimental settings through configuration files or command-line parameters.
+* **Easy to Configure:** Adjust experiments through Python constructor arguments and the command-line options exposed by example scripts.
 * **Reproducibility:** Aims to ensure the reproducibility of experimental results.
 * **Easy to Extend:** Decouple model training from model definition, without the concept of a base model.
 * **Native Functions:** Use PyTorch's native classes and functions as much as possible without excessive customization.
@@ -64,21 +64,21 @@ See [Development Tools](/tools/intro) for details.
 
 ## Supported Models
 
-### Ranking Models - 13
+### Ranking Models - 13 exported classes
 
-* DeepFM, Wide&Deep, DCN, DCN-v2, DIN, DIEN, BST, AFM, AutoInt, FiBiNET, DeepFFM, EDCN
+* DeepFM, WideDeep, DCN, DCNv2, DIN, DIEN, BST, AFM, AutoInt, FiBiNet, DeepFFM, FatDeepFFM, EDCN
 
-### Matching Models - 12
+### Matching Models - 12 exported classes
 
-* DSSM, YoutubeDNN, YoutubeSBC, MIND, SINE, GRU4Rec, SASRec, NARM, STAMP, ComiRec, FacebookDSSM
+* DSSM, YoutubeDNN, YoutubeSBC, MIND, SINE, GRU4Rec, SASRec, NARM, STAMP, ComirecDR, ComirecSA, FaceBookDSSM
 
 ### Multi-Task Models - 5
 
 * ESMM, MMoE, PLE, AITM, SharedBottom
 
-### Generative Recommendation - 2
+### Generative Recommendation - 4
 
-* HSTU, HLLM
+* HSTU, HLLM, RQ-VAE, TIGER
 
 ## Quick Start
 

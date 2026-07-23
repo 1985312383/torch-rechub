@@ -191,12 +191,27 @@ trainer = MTLTrainer(
     task_types=["classification", "classification"],
     optimizer_params={"lr": 1e-3},
     regularization_params={"embedding_l2": 0.0, "dense_l2": 0.0},
-    adaptive_params=None,   # 可选: {"method": "uwl"} / {"method": "gradnorm"} / {"method": "metabalance"}
+    adaptive_params=None,   # 可选: {"method": "uwl"}
     n_epoch=10,
     earlystop_taskid=0,
     earlystop_patience=10,
     device="cpu",
     model_path="./saved/mtl",
+)
+```
+
+> 当前只建议使用等权损失（`None`）或 UWL。`gradnorm` / `metabalance` 分支在当前 `MTLTrainer.train_one_epoch()` 中会在合并正则项前引用未赋值的 `loss`，不应当作可用配置。
+
+ESMM 是一个特例：它输出 `[cvr, ctr, ctcvr]`，因此必须重新用三列标签构建 DataLoader，并把训练器配置为：
+
+```python
+esmm_trainer = MTLTrainer(
+    model,
+    task_types=["classification", "classification", "classification"],
+    optimizer_params={"lr": 1e-3},
+    n_epoch=10,
+    device="cpu",
+    model_path="./saved/esmm",
 )
 ```
 

@@ -45,7 +45,7 @@ item_features = [
 model = DSSM(
     user_features=user_features,
     item_features=item_features,
-    temperature=0.02,
+    temperature=1.0,  # retained for API compatibility; current DSSM.forward does not use it
     user_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "prelu"},
     item_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "prelu"}
 )
@@ -57,7 +57,7 @@ model = DSSM(
 | --- | --- | --- | --- |
 | user_features | list | User feature list | None |
 | item_features | list | Item feature list | None |
-| temperature | float | Temperature parameter for similarity distribution | 0.02 |
+| temperature | float | Retained parameter; current `DSSM.forward` does not apply it | 1.0 |
 | user_params | dict | User tower network parameters | None |
 | item_params | dict | Item tower network parameters | None |
 
@@ -87,7 +87,8 @@ from torch_rechub.models.matching import FaceBookDSSM
 
 model = FaceBookDSSM(
     user_features=user_features,
-    item_features=item_features,
+    pos_item_features=item_features,
+    neg_item_features=neg_item_features,
     user_params={"dims": [512, 256, 128], "dropout": 0.3, "activation": "relu"},
     item_params={"dims": [512, 256, 128], "dropout": 0.3, "activation": "relu"}
 )
@@ -98,9 +99,12 @@ model = FaceBookDSSM(
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
 | user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
+| pos_item_features | list | Positive-item feature list | required |
+| neg_item_features | list | Negative-item features corresponding to the positive features | required |
 | user_params | dict | User tower network parameters | None |
-| item_params | dict | Item tower network parameters | None |
+| item_params | dict | Item-tower parameters shared by positive and negative items | None |
+
+`FaceBookDSSM.forward()` returns `(pos_score, neg_score)`. Use it with the pair-wise/BPR loss from `MatchTrainer(mode=1)`, not DSSM's point-wise data format.
 
 ### Use Cases
 
@@ -237,17 +241,24 @@ Chen, Jiaxi, et al. "Multi-interest network with dynamic routing for recommendat
 ```python
 from torch_rechub.models.matching import MIND
 
-user_features = [
-    SequenceFeature(name="user_history", vocab_size=100000, embed_dim=32, pooling=None),
-    SparseFeature(name="user_id", vocab_size=10000, embed_dim=16)
+user_features = [SparseFeature("user_id", vocab_size=10000, embed_dim=16)]
+history_features = [
+    SequenceFeature("hist_item_id", vocab_size=100000, embed_dim=16,
+                    pooling="concat", shared_with="item_id")
+]
+item_features = [SparseFeature("item_id", vocab_size=100000, embed_dim=16)]
+neg_item_feature = [
+    SequenceFeature("neg_items", vocab_size=100000, embed_dim=16,
+                    pooling="concat", shared_with="item_id")
 ]
 
 model = MIND(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    user_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
-    n_items=100000,
-    n_interest=4,
+    neg_item_feature=neg_item_feature,
+    max_length=50,
+    interest_num=4,
     temperature=0.02
 )
 ```
@@ -256,11 +267,12 @@ model = MIND(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| user_params | dict | User tower network parameters | None |
-| n_items | int | Total number of items | None |
-| n_interest | int | Number of interests to learn | 4 |
+| user_features | list | Non-sequential user features | required |
+| history_features | list | Item-history sequence with `pooling="concat"` | required |
+| item_features | list | Positive item-ID feature | required |
+| neg_item_feature | list | Negative item-ID sequence with `pooling="concat"` | required |
+| max_length | int | Fixed input-history length | required |
+| interest_num | int | Number of interests to learn | 4 |
 | temperature | float | Temperature parameter | 0.02 |
 
 ### Use Cases
@@ -299,12 +311,11 @@ user_features = [
 
 model = GRU4Rec(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    embedding_dim=32,
-    hidden_size=64,
-    num_layers=2,
-    dropout=0.2,
-    temperature=0.02
+    neg_item_feature=neg_item_feature,
+    user_params={"dims": [128, 64, 16], "dropout": 0.2},
+    temperature=0.02,
 )
 ```
 
@@ -313,12 +324,13 @@ model = GRU4Rec(
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
 | user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| embedding_dim | int | Embedding dimension | 32 |
-| hidden_size | int | GRU hidden layer size | 64 |
-| num_layers | int | Number of GRU layers | 2 |
-| dropout | float | Dropout rate | 0.2 |
+| history_features | list | History sequences with `pooling="concat"`; only the first is currently used | required |
+| item_features | list | Positive item-ID feature | required |
+| neg_item_feature | list | Negative item-ID sequence with `pooling="concat"` | required |
+| user_params | dict | User MLP; its last dimension must equal the item embedding dimension | required |
 | temperature | float | Temperature parameter | 0.02 |
+
+> The current `GRU4Rec.forward()` sums over the wrong axis for list-wise candidates. Treat this as the real constructor interface, not as a stable training tutorial, until the implementation is fixed.
 
 ### Use Cases
 
@@ -351,13 +363,11 @@ Li, Jing, et al. "Neural attentive session-based recommendation." Proceedings of
 from torch_rechub.models.matching import NARM
 
 model = NARM(
-    user_features=user_features,
-    item_features=item_features,
-    embedding_dim=32,
-    hidden_size=64,
-    num_layers=1,
-    dropout=0.2,
-    temperature=0.02
+    item_history_feature=item_history_feature,
+    hidden_dim=64,
+    emb_dropout_p=0.2,
+    session_rep_dropout_p=0.2,
+    item_feature=item_feature,  # only needed for in-batch negatives/item-tower inference
 )
 ```
 
@@ -365,13 +375,11 @@ model = NARM(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| embedding_dim | int | Embedding dimension | 32 |
-| hidden_size | int | GRU hidden layer size | 64 |
-| num_layers | int | Number of GRU layers | 1 |
-| dropout | float | Dropout rate | 0.2 |
-| temperature | float | Temperature parameter | 0.02 |
+| item_history_feature | SequenceFeature | Session item sequence; token 0 is padding | required |
+| hidden_dim | int | GRU hidden dimension | required |
+| emb_dropout_p | float | Item-embedding dropout | required |
+| session_rep_dropout_p | float | Session-representation dropout | required |
+| item_feature | SparseFeature or None | Optional target item ID for an independent item tower/in-batch negatives | None |
 
 ### Use Cases
 
@@ -404,14 +412,11 @@ Kang, Wang-Cheng, and Julian McAuley. "Self-attentive sequential recommendation.
 from torch_rechub.models.matching import SASRec
 
 model = SASRec(
-    user_features=user_features,
-    item_features=item_features,
-    embedding_dim=32,
+    features=[seq_feature, pos_feature, neg_feature],
+    max_len=50,
+    dropout_rate=0.2,
+    num_blocks=2,
     num_heads=4,
-    num_layers=2,
-    hidden_size=128,
-    dropout=0.2,
-    temperature=0.02
 )
 ```
 
@@ -419,12 +424,14 @@ model = SASRec(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| embedding_dim | int | Embedding dimension | 32 |
-| num_heads | int | Number of attention heads | 4 |
-| num_layers | int | Number of Transformer layers | 2 |
-| hidden_size | int | Hidden layer size | 128 |
-| dropout | float | Dropout rate | 0.2 |
-| temperature | float | Temperature parameter | 0.02 |
+| features | list | History, positive, then negative sequence features; all are `SequenceFeature` | required |
+| max_len | int | Sequence length | 50 |
+| dropout_rate | float | Embedding/attention/FFN dropout | 0.5 |
+| num_blocks | int | Number of self-attention blocks | 2 |
+| num_heads | int | Attention heads; must divide the embedding dimension | 1 |
+| item_feature | SparseFeature or None | Experimental independent item-tower feature | None |
+
+> SASRec currently creates its mask/positions on CPU, and the `item_feature` branch accesses a nonexistent embedding attribute. This page therefore documents the real constructor without claiming the GPU or item-tower paths are usable.
 
 ### Use Cases
 
@@ -457,14 +464,16 @@ Chen, Jiaxi, et al. "SINE: A sparse interest network for sequential recommendati
 from torch_rechub.models.matching import SINE
 
 model = SINE(
-    user_features=user_features,
-    item_features=item_features,
+    history_features=["hist_item_id"],
+    item_features=["item_id"],
+    neg_item_features=["neg_items"],
+    num_items=100000,
     embedding_dim=32,
+    hidden_dim=64,
+    num_concept=100,
+    num_intention=4,
+    seq_max_len=50,
     num_heads=4,
-    num_layers=2,
-    hidden_size=128,
-    dropout=0.2,
-    n_interest=4,
     temperature=0.02
 )
 ```
@@ -473,14 +482,16 @@ model = SINE(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| embedding_dim | int | Embedding dimension | 32 |
-| num_heads | int | Number of attention heads | 4 |
-| num_layers | int | Number of Transformer layers | 2 |
-| hidden_size | int | Hidden layer size | 128 |
-| dropout | float | Dropout rate | 0.2 |
-| n_interest | int | Number of interests | 4 |
+| history_features | list[str] | History item-sequence field names; only the first is currently used | required |
+| item_features | list[str] | Positive-item field names | required |
+| neg_item_features | list[str] | Negative-item sequence field names | required |
+| num_items | int | Item vocabulary size including padding | required |
+| embedding_dim | int | Embedding dimension | required |
+| hidden_dim | int | Attention hidden dimension | required |
+| num_concept | int | Number of global concept prototypes | required |
+| num_intention | int | Number of intentions selected per user | required |
+| seq_max_len | int | Fixed input sequence length | required |
+| num_heads | int | Self-attention heads | 1 |
 | temperature | float | Temperature parameter | 0.02 |
 
 ### Use Cases
@@ -514,12 +525,10 @@ Liu, Qiao, et al. "STAMP: short-term attention/memory priority model for session
 from torch_rechub.models.matching import STAMP
 
 model = STAMP(
-    user_features=user_features,
-    item_features=item_features,
-    embedding_dim=32,
-    hidden_size=128,
-    dropout=0.2,
-    temperature=0.02
+    item_history_feature=item_history_feature,
+    weight_std=0.05,
+    emb_std=0.05,
+    item_feature=item_feature,  # only needed for in-batch negatives/item-tower inference
 )
 ```
 
@@ -527,12 +536,10 @@ model = STAMP(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| embedding_dim | int | Embedding dimension | 32 |
-| hidden_size | int | Hidden layer size | 128 |
-| dropout | float | Dropout rate | 0.2 |
-| temperature | float | Temperature parameter | 0.02 |
+| item_history_feature | SequenceFeature | Session item sequence; token 0 is padding | required |
+| weight_std | float | Initialization standard deviation for attention parameters | required |
+| emb_std | float | Initialization standard deviation for embeddings/linear layers | required |
+| item_feature | SparseFeature or None | Optional target item ID for item-tower inference/in-batch negatives | None |
 
 ### Use Cases
 
@@ -566,13 +573,12 @@ from torch_rechub.models.matching import ComirecDR
 
 model = ComirecDR(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    embedding_dim=32,
-    hidden_size=128,
-    num_layers=2,
-    n_interest=4,
-    dropout=0.2,
-    temperature=0.02
+    neg_item_feature=neg_item_feature,
+    max_length=50,
+    interest_num=4,
+    temperature=0.02,
 )
 ```
 
@@ -580,13 +586,12 @@ model = ComirecDR(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| embedding_dim | int | Embedding dimension | 32 |
-| hidden_size | int | Hidden layer size | 128 |
-| num_layers | int | Number of layers | 2 |
-| n_interest | int | Number of interests | 4 |
-| dropout | float | Dropout rate | 0.2 |
+| user_features | list | Non-sequential user features | required |
+| history_features | list | Item history with `pooling="concat"` | required |
+| item_features | list | Positive-item features | required |
+| neg_item_feature | list | Negative-item sequence with `pooling="concat"` | required |
+| max_length | int | Fixed history length | required |
+| interest_num | int | Number of interests | 4 |
 | temperature | float | Temperature parameter | 0.02 |
 
 ### Use Cases
@@ -615,14 +620,11 @@ from torch_rechub.models.matching import ComirecSA
 
 model = ComirecSA(
     user_features=user_features,
+    history_features=history_features,
     item_features=item_features,
-    embedding_dim=32,
-    num_heads=4,
-    num_layers=2,
-    hidden_size=128,
-    n_interest=4,
-    dropout=0.2,
-    temperature=0.02
+    neg_item_feature=neg_item_feature,
+    interest_num=4,
+    temperature=0.02,
 )
 ```
 
@@ -630,14 +632,11 @@ model = ComirecSA(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| user_features | list | User feature list | None |
-| item_features | list | Item feature list | None |
-| embedding_dim | int | Embedding dimension | 32 |
-| num_heads | int | Number of attention heads | 4 |
-| num_layers | int | Number of Transformer layers | 2 |
-| hidden_size | int | Hidden layer size | 128 |
-| n_interest | int | Number of interests | 4 |
-| dropout | float | Dropout rate | 0.2 |
+| user_features | list | Non-sequential user features | required |
+| history_features | list | Item history with `pooling="concat"` | required |
+| item_features | list | Positive-item features | required |
+| neg_item_feature | list | Negative-item sequence with `pooling="concat"` | required |
+| interest_num | int | Number of interests | 4 |
 | temperature | float | Temperature parameter | 0.02 |
 
 ### Use Cases
@@ -686,6 +685,8 @@ model = ComirecSA(
 ## 15. Complete Training Example
 
 ```python
+import os
+
 from torch_rechub.models.matching import DSSM
 from torch_rechub.trainers import MatchTrainer
 from torch_rechub.utils.data import MatchDataGenerator
@@ -739,7 +740,7 @@ train_dl, test_dl, item_dl = dg.generate_dataloader(
 model = DSSM(
     user_features=user_features,
     item_features=item_features,
-    temperature=0.02,
+    temperature=1.0,  # current DSSM.forward does not use this parameter
     user_params={"dims": [256, 128, 64], "activation": "prelu"},
     item_params={"dims": [256, 128, 64], "activation": "prelu"}
 )
@@ -751,14 +752,16 @@ trainer = MatchTrainer(
     optimizer_params={"lr": 0.001, "weight_decay": 0.0001},
     n_epoch=50,
     earlystop_patience=10,
-    device="cuda:0",
+    device="cpu",
     model_path="saved/dssm"
 )
 
 # 6. Train model
-trainer.fit(train_dl, test_dl)
+os.makedirs("saved/dssm", exist_ok=True)
+# test_dl/item_dl are unlabeled embedding-inference loaders, not validation loaders
+trainer.fit(train_dl)
 
-# 7. Export ONNX model
+# 7. Export ONNX model (first install: pip install "torch-rechub[onnx]")
 # Export user tower
 trainer.export_onnx("user_tower.onnx", mode="user")
 # Export item tower
@@ -776,6 +779,7 @@ item_embeddings = trainer.inference_embedding(
 
 # Use Annoy or Faiss for vector indexing and retrieval
 # Here's an example using Annoy
+# First install: pip install "torch-rechub[annoy]"
 from annoy import AnnoyIndex
 
 # Create index

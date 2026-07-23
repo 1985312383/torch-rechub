@@ -5,81 +5,54 @@ description: Torch-RecHub 常见问题及故障排除指南
 
 # 常见问题解答
 
-Torch-RecHub 常见问题及故障排除指南
+Torch-RecHub 常见问题及故障排除指南。
 
-* **会推出 tensorflow 版本吗？**
+## 会推出 TensorFlow 版本吗？
 
-    - 暂不考虑
-  
-    - 本项目核心定位是面向初学者提供容易上手的、业界使用的模型复现参考，pytorch 受众面较广
+暂不考虑。项目当前以 PyTorch 为唯一运行时，重点是提供易于学习和扩展的推荐模型实现。
 
-* **为什么跑 example 得出的 auc=0**
+## 为什么示例的 AUC 很低或波动很大？
 
-    - example 为 100 条示例数据，供用户参考数据格式、特征类型，保证代码畅通运行，不保证精度
-    - 如果需要测试性能，可以按照 readme 中数据集描述的下载链接下载数据，然后参考 example 中的参数配置文件，进行模型训练与评估
+`examples/` 内置的样本数据集只用于验证数据格式、特征定义和训练链路，样本量很小，不用于衡量模型效果。请使用 README 中给出的完整数据集，重新做训练/验证/测试切分后再进行模型对比。
 
-- **annoy 安装**
+## Annoy 在 Windows 上安装失败怎么办？
 
-    - windows 安装 annoy
+先安装项目声明的 Annoy extra：
 
-        - 在线安装
+```bash
+python -m pip install "torch-rechub[annoy]"
+```
 
-        ```Bash
-        pip install annoy
-        ```
+如果 pip 没有找到适合当前 Python/平台的 wheel，就会尝试从源码编译。Windows 上出现 `Microsoft Visual C++ 14.0 or greater is required` 时，请安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)，重新打开终端后再执行上述命令。不建议安装与当前 Python 版本不匹配的旧 wheel。
 
-        如果 windows 上没有 C++相关编译环境，出现如下报错：
+![Annoy 编译环境报错](/img/win_install_annoy_error.png "Annoy 编译环境报错")
 
-        ```Bash
-        error: Microsoft Visual C++ 14.0 or greater is required. Get it with "Microsoft C++ Build Tools": https://visualstudio.microsoft.com/visual-cpp-build-tools/
-        ```
+## 为什么只安装一个向量后端后，`torch_rechub.serving` 仍然导入失败？
 
-        报错截图：
-        ![alt text](/img/win_install_annoy_error.png "报错截图")
-        
-        则可以采用离线安装方式
+当前 `torch_rechub.serving` 会同时导入 Annoy、Faiss 和 Milvus 实现。如果使用统一的 `builder_factory`，请同时安装三个 extra：
 
-        - 离线安装
+```bash
+python -m pip install "torch-rechub[annoy,faiss,milvus]"
+```
 
-        annoy 库下载地址：[https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy](https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy)
+## 为什么 `fit()` 时提示模型保存路径不存在？
 
-        ```Bash
-        pip install annoy‑1.17.0‑cp39‑cp39‑win_amd64.whl
-        ```
+当前 Trainer 不会自动创建 `model_path`，请在训练前创建：
 
-    - linux/mac os 安装 annoy
+```python
+import os
+from torch_rechub.trainers import CTRTrainer
 
-        - 在线安装
+os.makedirs("saved/deepfm", exist_ok=True)
+trainer = CTRTrainer(model, model_path="saved/deepfm")
+trainer.fit(train_dataloader, val_dataloader)
+```
 
-        ```text
-        pip install annoy
-        ```
+## 为什么从不同目录运行示例会提示数据文件不存在？
 
-        正常 mac 可以在线安装成功，如果在线安装报错，最下方提示和 nose 相关报错，则进行离线编译安装
+部分历史示例的默认数据路径是相对于脚本所在目录的。请先进入对应的 `examples/ranking`、`examples/matching` 等目录，或通过支持该参数的脚本的 `--dataset_path` 传入明确路径。
 
-        - 离线安装
+## 同一批 Feature 可以同时传给多个模型吗？
 
-          - 下载 nose
-
-            下载地址：[https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy](https://www.lfd.uci.edu/~gohlke/pythonlibs/#_annoy)
-
-            ```Bash
-            pip install nose‑1.3.7‑py3‑none‑any.whl
-            ```
-
-          - 下载 annoy
-
-            下载地址：[https://files.pythonhosted.org/packages/a1/5b/1c22129f608b3f438713b91cd880dc681d747a860afe3e8e0af86e921942/annoy-1.17.0.tar.gz](https://files.pythonhosted.org/packages/a1/5b/1c22129f608b3f438713b91cd880dc681d747a860afe3e8e0af86e921942/annoy-1.17.0.tar.gz)
-
-            ```Bash
-            tar -zxvf annoy-1.17.0.tar.gz
-            cd annoy-1.17.0
-            python setup.py install
-            ```
-
-      annoy 安装后，即可直接安装 torch-rechub 了
-
-      ```Python
-      pip install --upgrade torch-rechub
-      ```
+不建议。`SparseFeature` 和 `SequenceFeature` 会缓存已创建的 Embedding，复用同一个 Feature 实例会让多个模型共享参数。详见 [Feature 实例与 Embedding 所有权](/zh/core/features#feature-实例与-embedding-所有权)。
 

@@ -145,7 +145,7 @@ from torch_rechub.models.matching import DSSM
 model = DSSM(
     user_features=user_features,
     item_features=item_features,
-    temperature=0.02,  # 温度越小，正负样本分数通常会被拉得更开
+    temperature=1.0,  # 当前 DSSM 实现保留该参数，但 forward 尚未使用
     user_params={
         "dims": [256, 128, 64],
         "activation": "prelu"      # PReLU 激活函数效果更好
@@ -163,12 +163,12 @@ model = DSSM(
 |------|------|------|--------|
 | `user_features` | `list[Feature]` | 用户侧特征列表 | 用户属性 + 行为序列 |
 | `item_features` | `list[Feature]` | 物品侧特征列表 | 物品ID + 属性 |
-| `temperature` | `float` | 温度系数，控制相似度分数的平滑程度 | 0.02 ~ 0.1 |
+| `temperature` | `float` | 保留参数；当前 DSSM `forward` 未将它应用到分数 | 1.0 |
 | `user_params.dims` | `list[int]` | User Tower MLP 维度 | `[256, 128, 64]` |
 | `item_params.dims` | `list[int]` | Item Tower MLP 维度 | `[256, 128, 64]` |
 | `*_params.activation` | `str` | 激活函数 | `"prelu"` 推荐 |
 
-> **温度系数**: 较小的温度使模型对正负样本的区分更敏感，但训练可能不稳定。推荐从 0.02 开始调整。
+> 不要通过调整 `temperature` 期待改变当前 DSSM 的结果：源码中的温度缩放行尚未启用。
 
 ---
 
@@ -204,8 +204,10 @@ trainer.fit(train_dl)
 | mode | 训练方式 | 损失函数 | 说明 |
 |------|---------|---------|------|
 | 0 | Point-wise | BCE Loss | 对每个样本独立计算 |
-| 1 | Pair-wise | BPR Loss | 正负样本成对比较 |
-| 2 | List-wise | Softmax Loss | 全局排序优化 |
+| 1 | Pair-wise | BPR Loss | 需要模型返回 `(pos_score, neg_score)`，如 `FaceBookDSSM` |
+| 2 | List-wise | Softmax Loss | 需要模型返回 `[B, 1+n_neg]` logits，如 `YoutubeDNN` / `MIND` |
+
+`mode` 是训练器的损失契约，不能在同一个 DSSM 实例上任意切换。本页 DSSM 的标量概率输出应使用 `mode=0`。
 
 ---
 
@@ -239,9 +241,16 @@ print(f"Item Embedding shape: {item_embedding.shape}")
 ```python
 # 需要 match_evaluation 辅助函数
 # 位于 examples/matching/movielens_utils.py
-from movielens_utils import match_evaluation
+from examples.matching.movielens_utils import match_evaluation
 
-match_evaluation(user_embedding, item_embedding, test_user, all_item, topk=10)
+match_evaluation(
+    user_embedding,
+    item_embedding,
+    test_user,
+    all_item,
+    raw_id_maps="examples/matching/data/ml-1m/saved/raw_id_maps.npy",
+    topk=10,
+)
 ```
 
 ---
@@ -251,19 +260,18 @@ match_evaluation(user_embedding, item_embedding, test_user, all_item, topk=10)
 ### 6.1 关键调优点
 
 1. **激活函数**: 使用 `"prelu"` 通常优于 `"relu"`（原论文推荐）
-2. **温度系数**: `0.02` 是一个较好的起点
-3. **Embedding 维度**: User 和 Item Tower 的最终输出维度应相同（由 dims[-1] 决定）
-4. **负采样比例**: `neg_ratio=3~5` 通常效果较好
-5. **学习率**: 匹配任务推荐较小的学习率 `1e-4`
+2. **Embedding 维度**: User 和 Item Tower 的最终输出维度应相同（由 dims[-1] 决定）
+3. **负采样比例**: `neg_ratio=3~5` 通常效果较好
+4. **学习率**: 匹配任务推荐较小的学习率 `1e-4`
 
 ### 6.2 向量检索与部署
 
-训练完成后，需要将 Embedding 插入向量检索引擎进行 ANN（近似最近邻）搜索。Torch-RecHub 内置了对 **Annoy**、**Faiss** 和 **Milvus** 三种主流引擎的封装。
+训练完成后，可以将 Embedding 插入向量索引进行 ANN（近似最近邻）搜索。项目同时保留了 `torch_rechub.utils.match` 下的旧封装，以及 `torch_rechub.serving` 下的 Builder/Indexer API。
 
 #### 方式一：Annoy（轻量级，适合快速原型）
 
 ```bash
-pip install annoy
+pip install "torch-rechub[annoy]"
 ```
 
 ```python
@@ -279,10 +287,10 @@ print(f"Top-10 Item 索引: {indices}")
 print(f"对应距离: {distances}")
 ```
 
-#### 方式二：Faiss（高性能，支持 GPU 加速）
+#### 方式二：Faiss（本项目可选依赖为 CPU 版）
 
 ```bash
-pip install faiss-cpu  # 或 faiss-gpu
+pip install "torch-rechub[faiss]"
 ```
 
 ```python
@@ -300,30 +308,37 @@ faiss_index.fit(item_emb_np)
 # 查询 Top-10
 indices, distances = faiss_index.query(user_emb_np[0], n=10)
 print(f"Top-10 Item 索引: {indices}")
+# metric='l2' 时 distances 是距离，数值越小越近
 
 # 保存 / 加载索引
 faiss_index.save_index("item_faiss.index")
 faiss_index.load_index("item_faiss.index")
 ```
 
-> **Faiss 索引类型选择**:
+> **Faiss 索引类型选择**（实际规模上限取决于维度、内存和检索参数，应以压测为准）：
 > | 类型 | 特点 | 适用场景 |
 > |------|------|---------|
-> | `flat` | 精确搜索，无需训练 | 数据量 < 100万 |
-> | `ivf` | 倒排索引，需训练 | 数据量 100万~1亿 |
+> | `flat` | 精确搜索，无需训练 | 小规模或作为召回率基线 |
+> | `ivf` | 倒排索引，需训练 | 需要在速度与召回率间权衡 |
 > | `hnsw` | 图索引，无需训练 | 高召回率需求 |
 
-#### 方式三：Milvus（分布式，适合生产环境）
+#### 方式三：Milvus（旧封装仅用于隔离的本地实验）
 
 ```bash
-pip install pymilvus
+pip install "torch-rechub[milvus]"
 # 需要先启动 Milvus 服务: https://milvus.io/docs/install_standalone-docker.md
 ```
 
+::: danger 数据删除风险
+旧版 `torch_rechub.utils.match.Milvus` 在构造时会删除固定名称 `rechub` 的已有 collection，然后重新创建。不要对保存真实数据的 Milvus 实例运行下面的示例。
+:::
+
 ```python
 from torch_rechub.utils.match import Milvus
+from pymilvus import connections
 
 # 连接 Milvus 并插入 Embedding
+connections.connect(alias="default", host="localhost", port="19530")
 milvus = Milvus(dim=item_embedding.shape[1], host="localhost", port="19530")
 milvus.fit(item_embedding)
 
@@ -333,24 +348,32 @@ indices, distances = milvus.query(user_embedding, n=10)
 
 #### 使用新版 Serving API（Builder/Indexer 模式）
 
-项目还提供了更标准化的 `serving` 模块，统一管理不同后端：
+项目还提供了更标准化的 `serving` 模块。当前 `torch_rechub.serving` 会在导入时同时加载三种后端，因此即使这里只使用 Faiss，也要先安装三组依赖：
+
+```bash
+pip install "torch-rechub[annoy,faiss,milvus]"
+```
+
+下面示例使用 Faiss；`top_k` 是该 API 的参数名，返回值顺序是 `(indices, distances)`：
 
 ```python
 from torch_rechub.serving import builder_factory
 
 # 使用工厂函数创建 Builder（支持 "annoy" / "faiss" / "milvus"）
-builder = builder_factory("faiss", d=64, index_type="Flat", metric="L2")
+builder = builder_factory("faiss", index_type="Flat", metric="L2")
 
 # 构建索引并查询
 with builder.from_embeddings(item_embedding) as indexer:
-    results = indexer.query(user_embedding[:5], k=10)
-    print(results.indices, results.distances)
+    indices, distances = indexer.query(user_embedding[:5], top_k=10)
+    print(indices, distances)
     indexer.save("item.index")
 
 # 从文件加载
 with builder.from_index_file("item.index") as indexer:
-    results = indexer.query(user_embedding[:5], k=10)
+    indices, distances = indexer.query(user_embedding[:5], top_k=10)
 ```
+
+Serving API 的 Milvus Builder 会在上下文退出时删除临时 collection，并且不支持 `from_index_file`，因此当前也不是持久化生产服务封装。
 
 ---
 
@@ -395,7 +418,13 @@ visualize_model(model, save_path="dssm_architecture.pdf")
 
 ## 8. ONNX 导出
 
-将训练好的模型导出为 ONNX 格式，用于跨框架部署（如 ONNX Runtime、TensorRT）。
+先安装 ONNX 可选依赖，再导出模型：
+
+```bash
+pip install "torch-rechub[onnx]"
+```
+
+导出文件可以交给兼容的 ONNX Runtime 使用；具体服务和部署流程不包含在项目中。
 
 ### 导出完整模型
 
@@ -434,8 +463,11 @@ for inp in session.get_inputs():
     print(f"  {inp.name}: shape={inp.shape}, type={inp.type}")
 
 # 构造输入并推理
-input_feed = {inp.name: np.zeros(inp.shape, dtype=np.int64)
-              for inp in session.get_inputs()}
+input_feed = {}
+for inp in session.get_inputs():
+    shape = [dim if isinstance(dim, int) else 1 for dim in inp.shape]
+    dtype = np.int64 if "int" in inp.type.lower() else np.float32
+    input_feed[inp.name] = np.zeros(shape, dtype=dtype)
 output = session.run(None, input_feed)
 print(f"User Embedding shape: {output[0].shape}")
 ```
@@ -462,17 +494,17 @@ SequenceFeature("hist_movie_id", vocab_size=n_movie,
 2. 线上用 ONNX Runtime 实时计算 User Embedding
 3. 通过 ANN 检索最相似的 Top-K Item
 
-### Q4: temperature 设置过小会怎样？
-temperature 过小会使梯度变大，训练不稳定。如果 loss 出现 NaN，尝试增大 temperature（如 0.05 → 0.1）。
+### Q4: temperature 会影响当前 DSSM 吗？
+不会。构造参数仍被保留，但当前 `DSSM.forward()` 未执行温度缩放。
 
 ### Q5: Annoy、Faiss、Milvus 如何选择？
 
 | 特性 | Annoy | Faiss | Milvus |
 |------|-------|-------|--------|
 | 安装复杂度 | 简单 | 中等 | 需要服务 |
-| 检索速度 | 中等 | 快（支持GPU） | 快 |
-| 数据规模 | < 百万 | 亿级 | 亿级+分布式 |
-| 适用场景 | 原型验证 | 生产单机 | 生产分布式 |
+| 项目可选依赖 | `annoy` | `faiss-cpu` | `pymilvus` |
+| 持久化 | 可保存索引 | 可保存索引 | 当前 Serving 上下文退出即删临时 collection |
+| 当前建议 | 快速原型 | 单机实验与压测 | 仅在隔离实例验证，勿直接用于持久化生产数据 |
 
 ---
 
@@ -534,7 +566,7 @@ def main():
 
     # 4. 创建模型
     dg = MatchDataGenerator(x=x_train, y=y_train)
-    model = DSSM(user_features, item_features, temperature=0.02,
+    model = DSSM(user_features, item_features, temperature=1.0,
                  user_params={"dims": [256, 128, 64], "activation": "prelu"},
                  item_params={"dims": [256, 128, 64], "activation": "prelu"})
 

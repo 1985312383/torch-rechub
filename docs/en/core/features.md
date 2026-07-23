@@ -19,7 +19,7 @@ from torch_rechub.basic.features import DenseFeature
 dense_feature = DenseFeature(name="age", embed_dim=1)
 ```
 
-Parameters: `name`, `embed_dim` (always 1).
+Parameters: `name`, `embed_dim`. Scalar inputs normally use 1; if the field is already a vector, set it to the actual vector width.
 
 ## SparseFeature
 
@@ -50,10 +50,55 @@ sequence_feature = SequenceFeature(
     vocab_size=10000,
     embed_dim=32,
     pooling="mean",  # mean, sum, concat
+    padding_idx=0,    # use 0 for sequence padding
 )
 ```
 
-Parameters: `name`, `vocab_size`, `embed_dim` (auto if None), `pooling` (mean/sum/concat), `shared_with`, `padding_idx`, `initializer`.
+Parameters: `name`, `vocab_size`, `embed_dim` (auto if None), `pooling` (mean/sum/concat), `shared_with`, `padding_idx`, `initializer`. `mean` and `sum` reduce `(batch_size, seq_len, embed_dim)` to `(batch_size, embed_dim)`; `concat` preserves the sequence dimension.
+
+## Model Input Contract
+
+Feature objects describe how a model interprets fields; they do not encode raw categories or pad sequences for you. Input dictionaries normally follow this contract:
+
+| Feature type | Typical shape | Value contract |
+|---|---|---|
+| `DenseFeature` | `(batch_size,)` or `(batch_size, embed_dim)` | Convertible to floating point |
+| `SparseFeature` | `(batch_size,)` | Integer indices in `[0, vocab_size)` |
+| `SequenceFeature` | `(batch_size, seq_len)` | Integer indices padded to a common length before model input |
+
+When sequences are padded with `0`, set `padding_idx=0` explicitly. Otherwise, the default mask treats `-1`, not `0`, as padding.
+
+With `shared_with="item_id"`, the same `EmbeddingLayer` feature list must also contain a feature named `item_id` that creates its own embedding. The shared table determines the effective vocabulary size and embedding dimension.
+
+## Embedding Initialization
+
+`initializer` accepts a callable initializer instance. The built-ins are `RandomNormal`, `RandomUniform`, `XavierNormal`, `XavierUniform`, and `Pretrained`; `SparseFeature` and `SequenceFeature` default to `RandomNormal(0, 0.0001)`.
+
+```python
+import torch
+
+from torch_rechub.basic.features import SparseFeature
+from torch_rechub.basic.initializers import Pretrained, XavierUniform
+
+random_feature = SparseFeature(
+    name="item_id",
+    vocab_size=1000,
+    embed_dim=32,
+    padding_idx=0,
+    initializer=XavierUniform(gain=1.0),
+)
+
+weights = torch.randn(1000, 32)
+pretrained_feature = SparseFeature(
+    name="pretrained_item_id",
+    vocab_size=1000,
+    embed_dim=32,
+    padding_idx=0,
+    initializer=Pretrained(weights, freeze=False),
+)
+```
+
+`Pretrained` requires its weight shape to match `vocab_size` and `embed_dim` exactly. `freeze=True` is the default, so that embedding is not updated during training. The built-in random and Xavier initializers zero the `padding_idx` row when one is configured.
 
 ## Feature Instances and Embedding Ownership
 
@@ -103,7 +148,13 @@ sparse_features = [
 ]
 
 sequence_features = [
-    SequenceFeature(name="user_history", vocab_size=10000, embed_dim=32, pooling="mean"),
+    SequenceFeature(
+        name="user_history",
+        vocab_size=10000,
+        embed_dim=32,
+        pooling="mean",
+        padding_idx=0,
+    ),
 ]
 
 all_features = dense_features + sparse_features + sequence_features

@@ -5,7 +5,7 @@ description: Torch-RecHub 生成式推荐模型详细介绍
 
 # 生成式推荐模型
 
-生成式推荐模型是一种利用生成式AI技术（如大语言模型）进行推荐的新兴方法，能够生成个性化的推荐内容，提供更丰富、更自然的推荐体验。Torch-RecHub 提供了多种先进的生成式推荐模型，结合了推荐系统和生成式AI的优势。
+本页的“生成式推荐”指用序列模型预测或生成下一个 item token / 语义 ID。当前实现面向 next-item recommendation，并不生成推荐理由、商品文案或自然语言对话。
 
 ## 1. HSTUModel
 
@@ -37,6 +37,7 @@ model = HSTUModel(
     dv=32,
     max_seq_len=200,
     num_time_buckets=128,
+    time_bucket_unit="seconds",
 )
 
 seq_tokens = torch.randint(1, 100000, (32, 200))
@@ -67,63 +68,124 @@ print(logits.shape)  # torch.Size([32, 200, 100000])
 
 - 大规模序列推荐
 - 长序列建模
-- 实时推荐场景
-- 万亿参数级推荐系统
+- next-item prediction
 
 ## 2. HLLMModel
 
 ### 功能描述
 
-HLLM（Hybrid Large Language Model）是一种融合了大语言模型（LLM）能力的混合推荐模型，能够结合推荐系统的协同过滤能力和LLM的语义理解能力。
+`HLLMModel` 是一个轻量化的序列推荐实现：先在模型外用 LLM 生成 item embedding，然后冻结这张表，只训练用户序列 Transformer。它不会在 `forward` 中加载 BERT/LLM，也不接收 `user_features` / `item_features` 特征列表。
 
 ### 核心原理
 
-- **混合架构**：结合了传统推荐模型和大语言模型的优势
-- **语义理解**：利用LLM的强大语义理解能力，处理文本信息
-- **协同过滤**：保留传统推荐模型的协同过滤能力，利用用户-物品交互数据
-- **多模态融合**：支持文本、图像等多种模态的融合
+- **离线 item 语义表**：`item_embeddings[token_id]` 必须与训练数据的 token ID 对齐，row 0 为 PAD
+- **用户序列模型**：位置编码、可选时间桶 embedding 和相对位置 bias
+- **余弦打分**：Transformer 输出与冻结 item embedding 归一化后做矩阵乘，返回全词表 logits
 
 ### 使用方法
 
 ```python
 from torch_rechub.models.generative import HLLMModel
 
-# 创建模型
+import torch
+
+# 必须是 [vocab_size, d_model]，且第 i 行对应 token i
+item_embeddings = torch.load("item_embeddings_tinyllama.pt", map_location="cpu")
 model = HLLMModel(
-    user_features=user_features,
-    item_features=item_features,
-    llm_params={
-        "model_name": "bert-base-uncased",
-        "hidden_size": 768,
-        "num_heads": 12,
-        "num_layers": 12,
-        "dropout": 0.1
-    },
-    fusion_params={
-        "fusion_type": "concat",
-        "fusion_dims": [512, 256, 128],
-        "dropout": 0.2
-    }
+    item_embeddings=item_embeddings,
+    vocab_size=item_embeddings.shape[0],
+    d_model=item_embeddings.shape[1],
+    n_heads=8,
+    n_layers=2,
+    max_seq_len=50,
+    dropout=0.1,
+    temperature=0.07,
 )
+
+seq_tokens = torch.randint(1, item_embeddings.shape[0], (32, 50))
+time_diffs = torch.zeros_like(seq_tokens)  # 单位：秒
+logits = model(seq_tokens, time_diffs)
+print(logits.shape)  # [32, 50, vocab_size]
 ```
 
 ### 参数说明
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| user_features | list | 用户特征列表 | None |
-| item_features | list | 物品特征列表 | None |
-| llm_params | dict | 大语言模型参数 | None |
-| fusion_params | dict | 特征融合参数 | None |
+| item_embeddings | Tensor or str | `[vocab_size, d_model]` 的预计算 embedding，或 `torch.load` 可读的文件路径 | 必填 |
+| vocab_size | int | 包含 PAD=0 的词表大小，必须等于 embedding 行数 | 必填 |
+| d_model | int | Transformer 维度，必须等于 embedding 列数 | 512 |
+| n_heads / n_layers | int | Transformer 头数 / 层数 | 8 / 4 |
+| max_seq_len | int | 最大序列长度 | 256 |
+| use_rel_pos_bias | bool | 是否使用相对位置 bias | True |
+| use_time_embedding | bool | 是否使用时间差 embedding | True |
+| temperature | float | 余弦 logits 温度 | 0.07 |
 
 ### 适用场景
 
-- 融合LLM能力的推荐场景
-- 文本信息丰富的推荐场景
-- 需要生成式推荐的场景
-- 多模态推荐场景
+- 已能离线生成且按 token ID 对齐 item embedding 的场景
+- next-item 序列预测
+- 希望固定 item 语义空间、只训练用户序列塔的场景
 
-## 3. TIGERModel
+## 3. RQVAEModel
+
+### 功能描述
+
+RQ-VAE 将每个 item 的连续 embedding 经过多级残差向量量化，转换为离散 codebook 索引。这些索引再格式化为 `<a_12><b_7><c_91>` 一类语义 ID，是 TIGER 的 item token 来源。
+
+### 最小训练与语义 ID 链路
+
+```python
+import os
+import torch
+from torch.utils.data import DataLoader
+
+from torch_rechub.models.generative import RQVAEModel
+from torch_rechub.trainers.rqvae_trainer import Trainer
+from torch_rechub.utils.data import EmbDataset
+
+dataset = EmbDataset("examples/generative/data/amazon-books/processed/item_embeddings_tinyllama.pt")
+model = RQVAEModel(
+    in_dim=dataset.dim,
+    num_emb_list=[256, 256, 256],
+    e_dim=32,
+    layers=[512, 256, 128, 64],
+    sk_epsilons=[0.0, 0.0, 0.0],
+)
+
+os.makedirs("saved/rqvae", exist_ok=True)
+train_loader = DataLoader(dataset, batch_size=512, shuffle=True, num_workers=0)
+trainer = Trainer(model, n_epoch=50, device="cpu", model_path="saved/rqvae", eval_step=5)
+trainer.fit(train_loader)
+
+# 生成 semantic ID 时必须保持 dataset 原始顺序，否则字典中的 item index 会错位
+semantic_loader = DataLoader(dataset, batch_size=512, shuffle=False, num_workers=0)
+state = torch.load("saved/rqvae/model_best_collision_rate.pth", map_location="cpu")
+model.load_state_dict(state)
+model.eval()
+semantic_ids = model.generate_semantic_ids(
+    dataset,
+    semantic_loader,
+    prefix=["<a_{}>", "<b_{}>", "<c_{}>"],
+    use_sk=True,
+    device="cpu",
+)
+```
+
+`semantic_ids` 的 key 是 `EmbDataset` 中的行号，因此 embedding 文件的行顺序必须与后续 TIGER 数据中的 item ID 映射一致。不要在生成阶段使用 `shuffle=True`。
+
+### 主要参数
+
+| 参数 | 说明 |
+| --- | --- |
+| in_dim | 原始 item embedding 维度 |
+| num_emb_list | 每一级残差量化器的 codebook 大小，列表长度就是 semantic ID 段数 |
+| e_dim | 量化空间维度 |
+| layers | Encoder 隐藏层，Decoder 按逆序对称构建 |
+| loss_type | `mse` 或 `l1` 重建损失 |
+| sk_epsilons / sk_iters | Sinkhorn 分配参数，列表长度需与 codebook 级数一致 |
+
+## 4. TIGERModel
 
 ### 功能描述
 
@@ -166,41 +228,28 @@ model.resize_token_embeddings(len(tokenizer))
 
 - 基于语义 ID 的生成式检索
 - item 数量极大、需要压缩 item 表示的场景
-- 希望相似 item 共享前缀、提升冷启动与泛化的场景
+- 希望用多段离散 token 表示 item 的序列推荐实验
 
-## 4. 模型比较
+## 5. 模型比较
 
 | 模型 | 复杂度 | 表达能力 | 计算效率 | 适用场景 |
 | --- | --- | --- | --- | --- |
-| HSTUModel | 高 | 高 | 中 | 大规模序列推荐、长序列建模 |
-| HLLMModel | 高 | 高 | 低 | 融合LLM能力、文本信息丰富的场景 |
+| HSTUModel | 中 | 高 | 中 | next-item 预测、长序列建模 |
+| HLLMModel | 中 | 中 | 中 | 使用预计算 LLM item embedding 的序列推荐 |
+| RQVAEModel | 中 | 中 | 中 | 将连续 item embedding 量化为 TIGER 语义 ID |
 | TIGERModel | 高 | 高 | 中 | 基于语义 ID 的生成式检索、超大 item 空间 |
 
-## 5. 使用建议
+## 6. 使用建议
 
-1. **根据业务需求选择模型**：
-   - 大规模序列推荐场景推荐使用 HSTUModel
-   - 需要融合LLM能力的场景推荐使用 HLLMModel
-   - 文本信息丰富的推荐场景推荐使用 HLLMModel
+1. 直接对 item token 做 next-item 预测时，使用 HSTUModel。
+2. 已有按 token ID 对齐的 item embedding，且希望冻结 item 语义空间时，使用 HLLMModel。
+3. 使用 TIGER 前，先用 RQVAEModel 生成语义 ID；量化和生成两个阶段必须复用同一份 item 行号映射。
+4. HSTU/HLLM 的输出是 `[batch, seq_len, vocab_size]`，词表较大时需先估算 logits 的显存占用。
 
-2. **根据计算资源选择模型**：
-   - 计算资源有限时推荐使用 HSTUModel
-   - 计算资源充足时可以尝试 HLLMModel
-   - 考虑使用模型压缩技术，如知识蒸馏、量化等
-
-3. **模型训练建议**：
-   - 采用预训练+微调的方式，提高模型效果和训练效率
-   - 使用混合精度训练，加速模型训练
-   - 采用分布式训练，处理大规模数据
-
-4. **模型部署建议**：
-   - 考虑使用模型压缩技术，减少模型大小和推理延迟
-   - 采用服务化部署，支持高并发请求
-   - 考虑使用边缘计算，将模型部署到边缘设备
-
-## 6. 代码示例：完整的生成式推荐模型训练流程
+## 7. 代码示例：完整的生成式推荐模型训练流程
 
 ```python
+import os
 import pickle
 import torch
 
@@ -240,7 +289,8 @@ train_dl = train_gen.generate_dataloader(batch_size=512, num_workers=0)[0]
 val_dl = val_gen.generate_dataloader(batch_size=512, num_workers=0)[0]
 test_dl = test_gen.generate_dataloader(batch_size=512, num_workers=0)[0]
 
-vocab_size = len(vocab["item_to_idx"]) if "item_to_idx" in vocab else len(vocab)
+item_to_idx = vocab["item_to_idx"] if "item_to_idx" in vocab else vocab
+vocab_size = max(item_to_idx.values()) + 1  # token 0 为 PAD，不能只用 len(...)
 model = HSTUModel(
     vocab_size=vocab_size,
     d_model=128,
@@ -250,8 +300,10 @@ model = HSTUModel(
     dv=32,
     max_seq_len=200,
     dropout=0.1,
+    time_bucket_unit="seconds",
 )
 
+os.makedirs("saved/hstu", exist_ok=True)
 trainer = SeqTrainer(
     model,
     optimizer_fn=torch.optim.Adam,
@@ -267,83 +319,9 @@ test_loss, top1_acc = trainer.evaluate(test_dl)
 print(f"test_loss={test_loss:.4f}, top1_acc={top1_acc:.4f}")
 ```
 
-## 7. 常见问题与解决方案
+## 8. 当前实现边界
 
-### Q: 如何处理大规模数据？
-A: 可以尝试以下方法：
-- 采用分布式训练，利用多GPU或多机器并行训练
-- 使用数据采样技术，如负采样、分层采样等
-- 采用模型并行或流水线并行，处理超大模型
-- 考虑使用混合精度训练，加速训练过程
-
-### Q: 如何提高生成式推荐模型的推理效率？
-A: 可以尝试以下方法：
-- 使用模型压缩技术，如知识蒸馏、量化、剪枝等
-- 采用模型部署优化，如TensorRT、ONNX Runtime等
-- 考虑使用边缘计算，将模型部署到边缘设备
-- 采用异步推理或批处理，提高并发处理能力
-
-### Q: 如何评估生成式推荐模型的效果？
-A: 可以尝试以下方法：
-- 传统推荐评估指标：AUC、Precision@K、Recall@K、NDCG@K等
-- 生成式评估指标：BLEU、ROUGE、METEOR、Perplexity等
-- 人类评估：通过用户调研或A/B测试评估模型效果
-- 业务指标：点击率、转化率、用户留存率等
-
-### Q: 如何处理冷启动问题？
-A: 可以尝试以下方法：
-- 对于新用户，使用基于内容的推荐或流行度推荐
-- 对于新物品，利用LLM的语义理解能力，基于物品描述进行推荐
-- 使用迁移学习，从其他相关领域迁移知识
-- 采用元学习，快速适应新用户或新物品
-
-## 8. 生成式推荐的应用场景
-
-1. **个性化内容生成**：
-   - 生成个性化的推荐理由
-   - 生成个性化的商品描述
-   - 生成个性化的营销文案
-
-2. **多模态推荐**：
-   - 结合文本、图像、音频等多种模态
-   - 生成多模态的推荐内容
-   - 支持跨模态的推荐
-
-3. **交互式推荐**：
-   - 支持用户与推荐系统的自然语言交互
-   - 基于用户反馈动态调整推荐
-   - 生成对话式推荐
-
-4. **场景化推荐**：
-   - 基于用户当前场景生成推荐
-   - 生成场景化的推荐内容
-   - 支持复杂场景的推荐
-
-## 9. 未来发展趋势
-
-1. **大语言模型与推荐系统的深度融合**：
-   - 更紧密地结合LLM和推荐系统的优势
-   - 开发专门针对推荐场景优化的LLM
-   - 利用LLM的上下文理解能力，提供更个性化的推荐
-
-2. **多模态生成式推荐**：
-   - 结合多种模态的生成式推荐
-   - 支持跨模态的内容生成和推荐
-   - 开发更高效的多模态融合方法
-
-3. **实时生成式推荐**：
-   - 实现低延迟的生成式推荐
-   - 支持实时的用户交互和反馈
-   - 开发更高效的推理架构
-
-4. **可控生成式推荐**：
-   - 支持用户对推荐结果的控制和调整
-   - 实现可解释、可信赖的生成式推荐
-   - 开发更安全、更可靠的生成式推荐系统
-
-5. **大规模生成式推荐**：
-   - 支持数十亿用户和物品的大规模推荐
-   - 开发更高效的模型训练和推理方法
-   - 实现分布式、可扩展的生成式推荐系统
-
-生成式推荐是推荐系统的一个重要发展方向，能够提供更丰富、更自然、更个性化的推荐体验。Torch-RecHub 提供了多种先进的生成式推荐模型，方便开发者根据业务需求选择和使用。随着大语言模型和生成式AI技术的不断发展，生成式推荐将在更多场景中得到应用，为用户提供更好的推荐体验。
+- `SeqTrainer` 训练 HSTU/HLLM，并报告 loss 与 token-level top-1 accuracy；它没有内置 Recall@K、NDCG@K、BLEU 或 ROUGE 评估。
+- RQ-VAE 与 TIGER 是两阶段流程：先离线量化 item embedding，再训练 TIGER。项目不会自动生成原始 item embedding。
+- 当前训练器可选用单机 `DataParallel`，但没有 DDP、多机分布式、流水线并行或自动混合精度训练流程。
+- 本模块没有内置生产服务、TensorRT、边缘部署、自然语言内容生成或多模态推荐能力。需要这些能力时，应在项目外自行实现并验证。

@@ -3,11 +3,13 @@ title: 召回模型训练指南
 description: 召回模型的损失函数、相似度度量和温度缩放的完整指南
 ---
 
+# 召回模型训练指南
+
 ## 一、乱七八糟的Loss？—— 3种训练方式
 
 召回中，一般的训练方式分为三种：point-wise、pair-wise、list-wise。在RecHub中，用参数***mode***来指定训练方式，每一种不同的训练方式也对应不同的Loss。
 
-#### 1.1 Point wise (mode = 0)
+### 1.1 Point wise (mode = 0)
 
 > 🥰**核心思想：将召回视为二分类。**
 
@@ -17,7 +19,7 @@ description: 召回模型的损失函数、相似度度量和温度缩放的完�
 
 采用的Loss最常见的就是BCELoss（Binary Cross Entropy Loss）。
 
-#### 1.2 Pair wise (mode = 1)
+### 1.2 Pair wise (mode = 1)
 
 > 😝**核心思想：用户对正样本感兴趣的程度应该大于负样本。**
 
@@ -33,7 +35,7 @@ $$
 
 ***
 
-#### 1.3 List wise（mode = 2）
+### 1.3 List wise（mode = 2）
 
 > 😇**核心思想：用户对正样本感兴趣的程度应该大于负样本 。**
 
@@ -45,9 +47,9 @@ $$
 
 训练目标为：对正样本的兴趣得分应该尽可能大于其他所有负样本的兴趣得分。
 
-框架中采用的Loss为$torch.nn.CrossEntropyLoss$，即对输出进行Softmax处理后取。
+框架中采用的 Loss 为 `torch.nn.CrossEntropyLoss`。模型应输出未归一化 logits；该损失内部组合 `LogSoftmax` 与 `NLLLoss`，标签是正样本在候选列表中的位置。
 
-> PS：这里的List wise方式容易和Ranking中的List wise混淆，虽然二者名字一样，但ranking的List wise考虑了样本之间的顺序关系。例如ranking中会考虑MAP、NDCP等考虑顺序的指标作为评价指标，而Matching中的List wise没有考虑顺序。
+> PS：这里的 List wise 容易和 Ranking 中的 listwise 混淆。后者通常直接优化或近似排序列表目标，并用 MAP、NDCG 等顺序敏感指标评价；这里则是在一个正样本与若干负样本之间做多分类。
 
 ## 二、两个向量有多远？—— 3 种衡量指标
 
@@ -65,7 +67,7 @@ $$
 
 表示两个向量的夹角，会输出一个\[-1, 1]之间的实数，我们就可以以此作为相似度的衡量依据：两个向量之间角度越小，就越相似。
 
-在RecHub的所有双塔模型中，训练阶段都是输出的cosine相似度。
+RecHub 中 DSSM、YouTubeDNN、MIND、ComiRec、GRU4Rec 等实现会对塔输出做 L2 归一化，再以内积得到 cosine 相似度；其他序列召回实现的输出约定并不完全相同。接入自定义模型或切换架构时，应以对应 `forward()` 为准。
 
 ### 2.2 dot
 
@@ -73,7 +75,7 @@ $$
 
 一个很简单的思想是：**如果将a、b 向量L2 normalize，即 $\tilde{a}=\frac{a}{|a|}\ ,\tilde{b}=\frac{b}{|b|}$，然后直接将 $\tilde{a}、\tilde{b}$求内积，就等价于于 $cos(a,b)$**。 （很容易，这里就不推导了）
 
-实际上，RecHub中的所有双塔模型就是这么做的，先计算User Embedding和Item Embedding，然后分别将其进行L2 Norm，再计算内积，得到cosine相似度。这样可以提升模型 验证推理 的速度。
+当前多种双塔/多兴趣实现采用这种写法：先计算 user/item embedding，分别做 L2 normalize，再计算内积。它避免重复显式计算向量范数，也便于用 angular/IP 索引检索；但这不是仓库内所有 matching 模型的统一保证。
 
 ### 2.3 Euclidian Distance（欧氏距离）
 
@@ -97,7 +99,7 @@ $$
 1. 第二行到第三行，$\sum\ _{i=1}^N a\_i^2=1$。为什么？因为a是L2 Norm后的向量。b同理。
 2. 第三行到第四行，$\sum_{i=1}^Na_i*b_i$，即向量a、b的内积，因为a、b已经L2 Norm，所以相当于cos。
 
-在RecHub中，验证阶段采用的就是annoy的欧氏距离。
+旧版 matching 评估工具 `torch_rechub.utils.match.Annoy` 默认使用 `angular` 度量，而不是 `euclidean`。对 L2 归一化向量，angular 距离与 cosine 相似度单调对应；若显式切换后端或 metric，训练打分和检索度量应保持一致。
 
 > 🙋**小结：L2 Norm后的两个向量，max dot等价于max cosine等价于min EuclidianDistance**
 
@@ -123,4 +125,4 @@ $$
 
 也就是说，**对logits除上一个temperature的作用是扩大logits中每个元素中的上下限，拉回softmax运算的敏感范围** 。
 
-业界一般L2 Norm与temperature搭配使用。
+L2 normalize 常与 temperature 搭配使用，但 temperature 是否生效取决于具体模型：例如 DSSM-SENet、YouTubeDNN 会缩放 logits，而基础 DSSM 当前保留了参数但未在 `forward()` 中应用。不要仅凭构造函数存在 `temperature` 参数就假设它已参与训练。

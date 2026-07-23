@@ -20,7 +20,7 @@ YoutubeDNN 是 Google 在 RecSys'2016 上提出的深度神经网络召回模型
 - **User Tower**: 将用户属性和行为序列通过 DNN 映射为用户 Embedding
 - **Item Tower**: 直接使用物品 Embedding（不经过 DNN）
 - **训练方式**: 使用 Softmax + 负采样的 list-wise 训练
-- **负采样**: 同一 batch 内的其他 item 作为负样本
+- **负采样**: 本教程由 `generate_seq_feature_match(..., mode=2)` 生成显式 `neg_items` 列表；模型把正样本与这些负样本一起做 sampled softmax
 
 ### 适用场景
 
@@ -230,7 +230,7 @@ indices, distances = faiss_index.query(user_embedding[0].cpu().numpy().astype(np
 faiss_index.save_index("youtube_dnn_item.index")
 ```
 
-> **更多向量检索细节**请参考 [DSSM 教程的向量检索部分](/zh/tutorials/models/matching/dssm#62-向量检索与部署)，包含 Milvus 和 Serving API 的使用方法。
+> **更多向量检索细节**请参考 [DSSM 教程](/zh/tutorials/models/matching/dssm) 的“6.2 向量检索与部署”，其中包含各后端依赖和实现边界说明。
 
 ---
 
@@ -255,6 +255,12 @@ visualize_model(model, save_path="youtube_dnn_arch.png", dpi=300)
 ---
 
 ## 8. ONNX 导出
+
+先安装 ONNX 可选依赖：
+
+```bash
+pip install "torch-rechub[onnx]"
+```
 
 ```python
 from torch_rechub.utils.onnx_export import ONNXExporter

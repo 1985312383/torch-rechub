@@ -54,8 +54,10 @@ Torch-RecHub 提供了丰富的推荐模型库，涵盖了推荐系统的各个�
 
 | 模型 | 适用场景 | 特点 |
 | --- | --- | --- |
-| HSTU | 大规模序列推荐 | 层级序列转换单元，支撑万亿参数推荐系统 |
-| HLLM | 融合 LLM 能力的推荐 | 结合大语言模型的语义理解能力 |
+| HSTU | next-item 序列推荐 | 层级序列转换单元，支持位置/时间偏置 |
+| HLLM | 预计算 LLM item embedding 的序列推荐 | 冻结 item 语义表，训练用户序列 Transformer |
+| RQ-VAE | item 语义 ID 量化 | 把连续 item embedding 压缩成多级 codebook ID |
+| TIGER | 语义 ID 生成式检索 | 用 T5 生成下一个 item 的合法语义 ID |
 
 ## 模型文档导航
 
@@ -94,7 +96,7 @@ from torch_rechub.trainers import CTRTrainer
 model = DeepFM(deep_features=deep_features, fm_features=fm_features, mlp_params={"dims": [256, 128], "dropout": 0.2})
 
 # 创建训练器
-trainer = CTRTrainer(model, optimizer_params={"lr": 0.001}, device="cuda:0")
+trainer = CTRTrainer(model, optimizer_params={"lr": 0.001}, device="cpu")
 
 # 训练模型
 trainer.fit(train_dataloader, val_dataloader)
@@ -104,11 +106,11 @@ from torch_rechub.models.matching import DSSM
 from torch_rechub.trainers import MatchTrainer
 
 # 创建模型
-model = DSSM(user_features=user_features, item_features=item_features, temperature=0.02,
+model = DSSM(user_features=user_features, item_features=item_features, temperature=1.0,
              user_params={"dims": [256, 128, 64]}, item_params={"dims": [256, 128, 64]})
 
 # 创建训练器
-trainer = MatchTrainer(model, mode=0, device="cuda:0")
+trainer = MatchTrainer(model, mode=0, device="cpu")
 
 # 训练模型
 trainer.fit(train_dataloader)

@@ -1,888 +1,203 @@
-## HLLM 模型在 torch-rechub 中的复现说明
-
-本文档总结 torch-rechub 中对 ByteDance HLLM（Hierarchical Large Language Model for Recommendation）模型的复现情况，重点说明：
-
-- 当前实现的整体架构与关键设计细节；
-- 与 ByteDance 官方开源实现的一致之处；
-- 有意简化或仍然存在差异的部分。
-
+---
+title: HLLM 模型复现说明
+description: torch-rechub 中轻量 HLLM 实现的数据准备、训练命令、损失语义与实现边界
 ---
 
-## 1. 整体架构概览
+# HLLM 模型在 torch-rechub 中的复现说明
 
-### 1.1 模块划分
+本文说明仓库当前 HLLM（Hierarchical Large Language Model for Recommendation）示例的可运行路径。这里实现的是“离线预计算 item 文本 embedding + 轻量 User Transformer”的版本，不是 ByteDance 官方端到端 HLLM 训练栈，也不应把本文结果当作论文指标复现。
 
-与 HLLM 相关的主要模块如下：
+## 1. 代码入口
 
-- **模型主体**：`torch_rechub/models/generative/hllm.py`
-  - `HLLMTransformerBlock`：单层 Transformer block（多头注意力 + FFN）
-  - `HLLMModel`：完整 HLLM 模型（embedding lookup + Transformer blocks + scoring head）
-- **数据预处理**：
-  - `examples/generative/data/ml-1m/preprocess_ml_hstu.py`：MovieLens 序列数据预处理，生成 HSTU/HLLM 共用的序列样本
-  - `examples/generative/data/ml-1m/preprocess_hllm_data.py`：MovieLens 文本提取与 item embedding 生成
-  - `examples/generative/data/amazon-books/preprocess_amazon_books.py`：Amazon Books 序列数据预处理
-  - `examples/generative/data/amazon-books/preprocess_amazon_books_hllm.py`：Amazon Books 文本提取与 item embedding 生成
-- **训练脚本**：
+- 模型：`torch_rechub/models/generative/hllm.py`
+  - `HLLMTransformerBlock`
+  - `HLLMModel`
+- 通用序列训练器：`torch_rechub/trainers/seq_trainer.py`
+- MovieLens-1M：
+  - `examples/generative/data/ml-1m/preprocess_ml_hstu.py`
+  - `examples/generative/data/ml-1m/preprocess_hllm_data.py`
   - `examples/generative/run_hllm_movielens.py`
+- Amazon Books：
+  - `examples/generative/data/amazon-books/preprocess_amazon_books.py`
+  - `examples/generative/data/amazon-books/preprocess_amazon_books_hllm.py`
   - `examples/generative/run_hllm_amazon_books.py`
-- **数据集与数据生成器**：`torch_rechub/utils/data.py`（复用 HSTU 的 SeqDataset、SequenceDataGenerator）
-- **训练与评估**：`torch_rechub/trainers/seq_trainer.py`（复用 HSTU 的 SeqTrainer）
 
-### 1.2 数据与任务
+`examples/generative/data/*/processed/` 是运行预处理后生成的目录，仓库不提交其中的 `pkl` 或 embedding 文件。
 
-- 数据集：MovieLens-1M（ratings.dat + movies.dat）和 Amazon Books（官方默认数据集）
-- 任务形式：**Next-item prediction**（给定历史序列，预测下一个 item）
-- 训练目标：交叉熵损失（仅使用序列最后一个位置的 logits）
-- 评估指标：HR@K、NDCG@K（K=10, 50, 200）
+## 2. 当前模型做了什么
 
----
+### 2.1 Item 侧（离线且冻结）
 
-## 2. HLLM 核心架构
+预处理器支持两种 `--model_type`：
 
-### 2.1 两级结构
+| 参数 | HuggingFace 模型 | 隐藏维度 |
+| --- | --- | ---: |
+| `tinyllama` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 2048 |
+| `baichuan2` | `baichuan-inc/Baichuan2-7B-Chat` | 4096 |
 
-HLLM 采用"Item LLM + User LLM"的两级结构：
+文本格式为：
 
-1. **Item LLM（离线）**
-   - 输入：电影文本，格式为 `"Compress the following sentence into embedding: title: {title}genres: {genres}"`
-   - 处理：使用预训练 LLM（TinyLlama-1.1B 或 Baichuan2-7B）
-   - 输出：每个 item 的 embedding（维度 d_model，如 2048 或 4096）
-   - 提取方式：使用最后一个 token 的隐藏状态
-   - 特点：离线预计算，训练时固定不变
-
-2. **User LLM（在线）**
-   - 输入：item embedding 序列 `[E_1, E_2, ..., E_L]`
-   - 处理：Transformer blocks（多头自注意力 + FFN）
-   - 输出：预测 embedding `E'_L`
-   - Scoring head：`logits = E'_L @ E_items.T / τ`（点积 + 温度缩放）
-
-### 2.2 官方 vs 轻量级实现
-
-本实现采用**轻量级方式**，与官方 ByteDance HLLM 的端到端训练有以下差异：
-
-| 组件                 | 官方实现                   | 本实现（轻量级）            |
-| -------------------- | -------------------------- | --------------------------- |
-| **Item LLM**         | 完整 LLM，可参与端到端训练 | 预计算 embeddings，固定不变 |
-| **User LLM**         | 完整 LLM（如 Llama-7B）    | 轻量级 Transformer blocks   |
-| **item_emb_token_n** | 可学习的 embedding token   | 使用最后 token 的隐藏状态   |
-| **训练方式**         | 端到端联合训练             | 仅训练 User Transformer     |
-| **资源需求**         | 高（多 GPU，DeepSpeed）    | 低（单 GPU 可运行）         |
-| **适用场景**         | 大规模生产环境             | 研究、教学、快速原型        |
-
-**设计理由**：
-- ✅ 资源友好：单张 GPU 即可运行
-- ✅ 快速迭代：预计算 Item Embeddings，训练更快
-- ✅ 核心功能完整：提示词格式、模型架构与官方一致
-
-### 2.3 HLLMTransformerBlock 实现
-
-`torch_rechub/models/generative/hllm.py::HLLMTransformerBlock` 实现了标准的 Transformer block：
-
-1. **多头自注意力**
-   - 线性投影：Q, K, V 各自投影到 (B, L, D)
-   - 注意力打分：`scores = (Q @ K^T) / sqrt(d_head)`
-   - Causal mask：位置 i 只能看到 `≤ i` 的 token
-   - 可选相对位置偏置（复用 HSTU 的 RelPosBias）
-
-2. **前馈网络（FFN）**
-   - 结构：Linear(D → 4D) → ReLU → Dropout → Linear(4D → D) → Dropout
-   - 标准 Transformer 设计
-
-3. **残差连接与 LayerNorm**
-   - Pre-norm 架构：LayerNorm → 子层 → 残差
-   - 两个残差块：自注意力 + FFN
-
-### 2.4 HLLMModel 前向流程
-
-```
-seq_tokens (B, L)
-    ↓
-item_embeddings lookup → (B, L, D)
-    ↓
-+ position_embedding (L, D)
-    ↓
-+ time_embedding (可选) (B, L, D)
-    ↓
-Transformer blocks (n_layers)
-    ↓
-Scoring head: @ item_embeddings.T / τ
-    ↓
-logits (B, L, vocab_size)
+```text
+Compress the following sentence into embedding: title: {title}genres: {genres}
 ```
 
----
+Amazon Books 使用 `title` 与 `description`。脚本取最后一个 token 的隐藏状态，按 token id 行号写入 `item_embeddings_<model_type>.pt`；第 0 行保留给 PAD。`HLLMModel` 会检查行数等于 `vocab_size`、列数等于 `d_model`，随后做 L2 归一化并注册为不可训练 buffer。
 
-## 3. 时间戳建模
+缺少文本的 token 会保留为零向量。预处理日志会打印覆盖数量，正式实验应检查该数字，不能只检查文件是否存在。
 
-HLLM 复用 HSTU 的时间嵌入机制：
+### 2.2 User 侧（训练）
 
-- **时间差计算**：`query_time - historical_timestamps`
-- **单位转换**：秒 → 分钟（除以 60）
-- **Bucket 化**：sqrt 或 log 变换，映射到 [0, num_time_buckets-1]
-- **嵌入融合**：`embeddings = item_emb + pos_emb + time_emb`
+前向流程为：
 
----
-
-## 4. 训练与评估流水线
-
-### 4.1 数据预处理
-
-HLLM 训练需要两类预处理产物：
-
-1. **序列数据**：`vocab.pkl`、`train_data.pkl`、`val_data.pkl`、`test_data.pkl`，由 HSTU 格式预处理脚本生成；
-2. **Item 语义数据**：`movie_text_map.pkl` 或 `item_text_map.pkl`，以及 `item_embeddings_{model_type}.pt`，由 HLLM 预处理脚本生成。
-
-MovieLens-1M 使用：
-
-- `examples/generative/data/ml-1m/preprocess_ml_hstu.py`
-- `examples/generative/data/ml-1m/preprocess_hllm_data.py`
-
-Amazon Books 使用：
-
-- `examples/generative/data/amazon-books/preprocess_amazon_books.py`
-- `examples/generative/data/amazon-books/preprocess_amazon_books_hllm.py`
-
-这些脚本默认会在数据缺失时自动下载；`--no_download` 表示只使用本地文件，`--overwrite` 表示重新下载并覆盖已有下载/解压结果。
-
-**MovieLens HLLM 数据预处理**（`preprocess_hllm_data.py`）包含以下步骤：
-
-1. **文本提取**（遵循官方 ByteDance HLLM 格式）
-   - 从 movies.dat 提取 title 和 genres
-   - 生成文本描述：`"Compress the following sentence into embedding: title: {title}genres: {genres}"`
-   - 保存为 movie_text_map.pkl
-
-2. **Item Embedding 生成**
-   - 加载 TinyLlama-1.1B 或 Baichuan2-7B
-   - 使用最后一个 token 的隐藏状态作为 item embedding
-   - 保存为 item_embeddings_tinyllama.pt 或 item_embeddings_baichuan2.pt
-
-**官方提示词格式说明**：
-
-```python
-# 官方 ByteDance HLLM 配置
-ITEM_PROMPT = "Compress the following sentence into embedding: "
-
-# MovieLens 数据集
-text = f"{ITEM_PROMPT}title: {title}genres: {genres}"
-
-# Amazon Books 数据集
-text = f"{ITEM_PROMPT}title: {title}description: {description}"
+```text
+seq_tokens [B, L]
+  -> 冻结 item embedding lookup
+  + 可学习绝对位置 embedding
+  + 可选时间 bucket embedding
+  -> causal Transformer blocks
+  -> L2 normalize hidden states
+  -> hidden @ normalized_item_embeddings.T / 0.07
+  -> logits [B, L, V]
 ```
 
-**关键点**：
-- ✅ 使用官方 `item_prompt` 前缀：`"Compress the following sentence into embedding: "`
-- ✅ 使用 `key: value` 格式（无空格，如 `title: xxx`）
-- ✅ 使用最后一个 token 的隐藏状态（不再使用 `[ITEM]` 特殊标记）
+每个 block 使用 pre-norm 多头自注意力、前馈网络和残差连接。当前注意力只构造 causal mask，没有额外的 padding attention mask；左侧 PAD 位置仍会叠加位置/时间 embedding，这是与完整生产实现需要特别核对的边界。
 
-3. **序列数据预处理**（先运行 `preprocess_ml_hstu.py`）
-   - 生成 seq_tokens、seq_positions、seq_time_diffs、targets
-   - 按用户划分 train/val/test
+### 2.3 训练目标与 `NCELoss` 的真实语义
 
-### 4.2 训练与评估
+`SeqTrainer` 训练整段 next-token 目标，而不是只训练最后一个位置：
 
-- 使用 `SeqTrainer` 进行训练
-- **损失函数**：支持两种选择
-  - **NCE Loss**（推荐，默认）：噪声对比估计损失，训练效率更高（提升 30-50%）
-  - **CrossEntropyLoss**：标准交叉熵损失
-- 评估指标：HR@K、NDCG@K
-
-#### NCE Loss 说明
-
-NCE Loss（Noise Contrastive Estimation）是一种高效的损失函数，特别适合大规模推荐系统：
-
-**优势**：
-- ✅ 训练效率提升 30-50%（相比 CrossEntropyLoss）
-- ✅ 更好地处理大规模 item 集合
-- ✅ 支持温度缩放参数调整
-- ✅ 内置 in-batch negatives 负采样策略
-
-**使用方法**：
-```bash
-# 使用 NCE Loss（默认，推荐）
-python examples/generative/run_hllm_movielens.py --loss_type nce --device cuda
-
-# 使用 CrossEntropyLoss
-python examples/generative/run_hllm_movielens.py --loss_type cross_entropy --device cuda
+```text
+logits[:, i, :]  -> seq_tokens[:, i + 1]
+logits[:, -1, :] -> held-out targets
 ```
 
-**参数配置**：
-- NCE Loss 默认温度参数：`temperature=0.1`
-- 可通过修改训练脚本中的 `loss_params` 调整
+PAD 标签 `0` 被忽略。`--loss_type cross_entropy` 使用 `CrossEntropyLoss`；`--loss_type nce` 使用项目的 `NCELoss`。
 
-#### 负采样策略说明
+需要注意：当前 `NCELoss` 对全量词表 logits 做 temperature 缩放、`log_softmax` 和目标类负对数似然，并未采样噪声，也未自动构造 in-batch negatives。因此不能据此宣称采样 NCE 的计算加速或额外指标提升。两个 HLLM 训练脚本都给 `NCELoss` 传入 `temperature=1.0`，因为模型输出已经按 `0.07` 缩放，避免重复 temperature。
 
-当前实现使用 **In-Batch Negatives** 策略：
+## 3. 安装与模型缓存
 
-**原理**：
-- 使用同一 batch 内其他样本的 target 作为负样本
-- 自动获得 batch_size-1 个负样本
-- 无需额外计算，计算效率高
-
-**性能提升**：
-- ✅ 模型性能提升 5-10%
-- ✅ 无额外计算开销
-- ✅ 自动应用，无需配置
-
-**工作原理**：
-```
-Batch 中的样本：[target_1, target_2, ..., target_B]
-
-对于样本 i：
-- 正样本：target_i
-- 负样本：{target_j | j ≠ i}（自动使用）
-
-Loss 计算时自动利用这些负样本
-```
-
----
-
-## 5. 使用指南
-
-### 5.1 环境要求
-
-#### 5.1.1 依赖包
+从仓库根目录安装：
 
 ```bash
-pip install torch transformers numpy pandas scikit-learn
+pip install -e ".[generative]"
 ```
 
-#### 5.1.2 GPU 与 CUDA
+`generative` extra 提供 `transformers` 与 `accelerate`。若所选模型的 tokenizer 报缺少 SentencePiece（Baichuan2 环境较常见），还需执行 `pip install sentencepiece`；该包当前未包含在 extra 中。
 
-- **GPU 检查**：确保 PyTorch 能识别 GPU
-  ```python
-  import torch
-  print(torch.cuda.is_available())  # 应输出 True
-  print(torch.cuda.get_device_name(0))  # 显示 GPU 名称
-  ```
+MovieLens 的 HLLM 预处理脚本会先以 `local_files_only=True` 检查 HuggingFace 缓存；目标 LLM 未缓存时会直接退出。请先在可联网环境下载相应模型，或预先把缓存复制到运行环境。`--no_download` 只控制数据集文件，不会让未缓存的 LLM 自动变为可用。
 
-- **显存需求**：
-  - **TinyLlama-1.1B**：至少 3GB 显存（推荐 4GB+）
-  - **Baichuan2-7B**：至少 16GB 显存（推荐 20GB+）
-  - **HLLM 训练**：至少 6GB 显存（batch_size=512）
+## 4. MovieLens-1M 复现命令
 
-#### 5.1.3 数据准备
-
-##### MovieLens-1M 目录结构
-
-MovieLens-1M 的脚本默认从 `examples/generative/data/ml-1m/` 读取原始数据，并把预处理产物写入 `processed/`：
-
-```
-torch-rechub/
-├── examples/
-│   └── generative/
-│       └── data/
-│           └── ml-1m/                          # MovieLens-1M 数据集
-│               ├── movies.dat                  # 原始电影元数据（自动下载或手动放置）
-│               ├── ratings.dat                 # 原始评分数据（自动下载或手动放置）
-│               ├── users.dat                   # 原始用户数据（自动下载或手动放置）
-│               ├── processed/                  # 预处理后的数据（自动生成）
-│               │   ├── vocab.pkl               # 词表（HSTU 生成）
-│               │   ├── train_data.pkl          # 训练数据（HSTU 生成）
-│               │   ├── val_data.pkl            # 验证数据（HSTU 生成）
-│               │   ├── test_data.pkl           # 测试数据（HSTU 生成）
-│               │   ├── movie_text_map.pkl      # 电影文本映射（HLLM 生成）
-│               │   └── item_embeddings_tinyllama.pt  # Item embeddings（HLLM 生成）
-│               ├── preprocess_ml_hstu.py       # HSTU 数据预处理脚本
-│               └── preprocess_hllm_data.py     # HLLM 统一预处理脚本
-```
-
-默认情况下，`preprocess_ml_hstu.py` 和 `preprocess_hllm_data.py` 都会检查 `ratings.dat`、`movies.dat`、`users.dat` 是否存在；缺失时会下载官方 `ml-1m.zip` 并解压。已有本地文件时可加 `--no_download`，需要刷新下载/解压结果时可加 `--overwrite`。
-
-##### Amazon Books 目录结构
-
-Amazon Books 是 ByteDance HLLM 的官方默认数据集。本实现提供 `raw` 和 `bytedance` 两种数据源：
-
-- `bytedance`：默认值，下载 ByteDance 处理后的交互和 item information；
-- `raw`：下载 Stanford SNAP 原始 `ratings_Books.csv` 和 `meta_Books.json.gz`。
+以下命令均从仓库根目录运行：
 
 ```bash
-torch-rechub/
-├── examples/
-│   └── generative/
-│       └── data/
-│           └── amazon-books/
-│               ├── ratings_Books.csv           # 交互数据（raw 或 bytedance 下载）
-│               ├── meta_Books.json.gz          # raw 元数据
-│               ├── item_information.csv        # bytedance item information
-│               ├── processed/
-│               │   ├── vocab.pkl
-│               │   ├── train_data.pkl
-│               │   ├── val_data.pkl
-│               │   ├── test_data.pkl
-│               │   ├── item_text_map.pkl
-│               │   └── item_embeddings_tinyllama.pt
-│               ├── preprocess_amazon_books.py
-│               └── preprocess_amazon_books_hllm.py
-```
+# 1. 生成序列数据；缺少 ratings.dat/movies.dat/users.dat 时自动下载
+python examples/generative/data/ml-1m/preprocess_ml_hstu.py
 
-手动下载时，ByteDance 交互文件默认命名为 `amazon_books_interactions.csv`（也接受 `amazon_books.csv` 作为 fallback）；ByteDance item information 也可命名为 `amazon_books_items.csv` 或带有 `item_id,description,title` 列的 `amazon_books.csv`。
+# 2. 生成文本映射与 token-id 对齐的 item embeddings
+python examples/generative/data/ml-1m/preprocess_hllm_data.py \
+    --model_type tinyllama \
+    --device cuda
 
-**预训练 LLM 模型**：
-
-官方推荐的 LLM 模型包括：
-- [TinyLlama](https://github.com/jzhang38/TinyLlama)（本实现支持）
-- [Baichuan2](https://huggingface.co/baichuan-inc/Baichuan2-7B-Base)（本实现支持）
-- Llama-2、Qwen 等（可按需扩展）
-
-### 5.2 快速开始 - 推荐方式
-
-使用统一的数据预处理脚本 `preprocess_hllm_data.py`（包含文本提取 + embedding 生成）：
-
-```bash
-# 1. 进入数据目录
-cd examples/generative/data/ml-1m
-
-# 2. 预处理 MovieLens-1M 序列数据（缺少原始文件时自动下载）
-python preprocess_ml_hstu.py
-
-# 3. HLLM 数据预处理（文本提取 + embedding 生成；同样支持自动下载）
-# 选项 A：TinyLlama-1.1B（推荐，2GB GPU，~10 分钟）
-python preprocess_hllm_data.py --model_type tinyllama --device cuda
-
-# 选项 B：Baichuan2-7B（更大，14GB GPU，~30 分钟）
-# python preprocess_hllm_data.py --model_type baichuan2 --device cuda
-
-# 4. 返回项目根目录并训练模型
-cd ../../../..
+# 3. 训练与评估
+mkdir -p outputs/hllm_ml
 python examples/generative/run_hllm_movielens.py \
     --model_type tinyllama \
     --epoch 5 \
-    --batch_size 512 \
-    --device cuda
-```
-
-**预期时间**：~40 分钟（包括 HSTU 预处理、HLLM 数据处理、模型训练）
-
-### 5.3 详细步骤说明
-
-#### 步骤 1：数据预处理（HSTU 格式）
-
-```bash
-python preprocess_ml_hstu.py
-
-# 只使用本地原始文件
-python preprocess_ml_hstu.py --no_download
-
-# 重新下载并覆盖已解压文件
-python preprocess_ml_hstu.py --overwrite
-```
-
-**输出文件**：
-- `processed/vocab.pkl`
-- `processed/train_data.pkl`
-- `processed/val_data.pkl`
-- `processed/test_data.pkl`
-
-每个 split 文件都包含 `seq_tokens`、`seq_positions`、`seq_time_diffs`、`targets` 四个字段。MovieLens 默认按用户划分 70% train、10% val、20% test。
-
-#### 步骤 2：统一 HLLM 数据预处理（推荐）
-
-```bash
-# 一条命令完成文本提取 + embedding 生成
-python preprocess_hllm_data.py \
-    --model_type tinyllama \
-    --device cuda
-
-# 只使用本地原始文件
-python preprocess_hllm_data.py \
-    --model_type tinyllama \
-    --device cuda \
-    --no_download
-```
-
-**功能**：
-1. 从 `movies.dat` 提取电影文本（title + genres）
-2. 使用 LLM 生成 item embeddings
-3. 保存所有必需的输出文件
-
-**输出文件**：
-- `processed/movie_text_map.pkl`（电影 ID → 文本描述）
-- `processed/item_embeddings_tinyllama.pt`（item embeddings）
-
-**环境检查**（脚本自动执行）：
-- ✅ GPU/CUDA 可用性检查
-- ✅ 显存充足性检查
-- ✅ 模型缓存检查（详细的缓存路径调试信息）
-
-#### 步骤 2 (替代方案)：指定输入输出目录
-
-当原始数据或预处理产物不在默认目录时，显式传入目录：
-
-```bash
-cd examples/generative/data/ml-1m
-python preprocess_ml_hstu.py \
-    --data_dir /path/to/ml-1m \
-    --output_dir /path/to/processed
-
-python preprocess_hllm_data.py \
-    --data_dir /path/to/ml-1m \
-    --output_dir /path/to/processed \
-    --model_type tinyllama \
-    --device cuda
-```
-
-**输出文件**：
-- `/path/to/processed/movie_text_map.pkl`
-- `/path/to/processed/item_embeddings_tinyllama.pt`
-
-#### 步骤 3：训练 HLLM 模型
-
-```bash
-cd ../../../..
-python examples/generative/run_hllm_movielens.py \
-    --model_type tinyllama \
-    --epoch 5 \
-    --batch_size 512 \
+    --batch_size 64 \
     --learning_rate 1e-3 \
     --weight_decay 1e-5 \
     --max_seq_len 200 \
+    --loss_type nce \
     --device cuda \
-    --seed 42
+    --save_dir outputs/hllm_ml \
+    --seed 2022
 ```
 
-**环境检查**（脚本自动执行）：
-- ✅ GPU/CUDA 可用性检查
-- ✅ 显存充足性检查
-- ✅ Item embeddings 文件存在性检查
+默认数据目录是 `examples/generative/data/ml-1m/processed/`，应包含：
 
-**参数说明**：
-- `--model_type`：LLM 模型类型（tinyllama 或 baichuan2）
-- `--epoch`：训练轮数（默认 10）
-- `--batch_size`：批大小（默认 64）
-- `--learning_rate`：学习率（默认 1e-3）
-- `--weight_decay`：L2 正则化（默认 1e-5）
-- `--max_seq_len`：最大序列长度（默认 200）
-- `--device`：计算设备（cuda 或 cpu）
-- `--seed`：随机种子（默认 2022）
-- `--loss_type`：损失函数类型（cross_entropy 或 nce，默认 nce）
-  - `cross_entropy`：标准交叉熵损失
-  - `nce`：噪声对比估计损失（推荐，训练效率更高）
+```text
+vocab.pkl
+train_data.pkl
+val_data.pkl
+test_data.pkl
+movie_text_map.pkl
+item_embeddings_tinyllama.pt
+```
 
-### 5.4 Amazon Books 数据集（官方默认）
+MovieLens 序列预处理采用按用户 leave-last-out：最后一次交互为 test target，倒数第二次为 validation target，之前的前缀生成训练样本；不是 70/10/20 用户随机划分。
 
-如果要在 Amazon Books 数据集上训练 HLLM，请按以下步骤操作。这是 ByteDance 官方 HLLM 使用的默认数据集。
+自定义目录时，两个预处理脚本必须使用同一个 `--output_dir`，训练时再通过 `--dataset_path` 指向该目录。训练脚本对显式相对 `--dataset_path` 的处理与脚本目录有关，自动化任务中建议传绝对路径。
 
-#### 数据集概述
+## 5. Amazon Books 复现命令
 
-Amazon Books 数据集包含书籍产品的用户评分和元数据，是 HLLM 论文中使用的官方基准数据集。
-
-**数据集统计**（过滤后）：
-- 交互数：~8M
-- 产品数：~370K
-- 用户数：~600K
-- 时间跨度：1996-2014
-
-#### 步骤 1：选择数据源
-
-Amazon Books 预处理脚本默认使用 ByteDance 处理后的数据：
-
-- 交互数据：`https://huggingface.co/ByteDance/HLLM/resolve/main/Interactions/amazon_books.csv`
-- Item 信息：`https://huggingface.co/ByteDance/HLLM/resolve/main/ItemInformation/amazon_books.csv`
-
-如果指定 `--data_source raw`，脚本会改用 Stanford SNAP 原始数据：
-
-- 交互数据：`http://snap.stanford.edu/data/amazon/productGraph/categoryFiles/ratings_Books.csv`
-- 元数据：`http://snap.stanford.edu/data/amazon/productGraph/categoryFiles/meta_Books.json.gz`
-
-默认会在文件缺失时自动下载。复用本地文件时加 `--no_download`，刷新已有下载时加 `--overwrite`。
-
-#### 步骤 2：预处理数据
-
-**2.1 生成 HSTU 格式的序列数据**
+序列数据与 item metadata 必须选择一致的数据源。默认 `bytedance` 会下载 ByteDance 处理后的文件；`raw` 使用 Stanford SNAP 原始文件。
 
 ```bash
-cd examples/generative/data/amazon-books
-
-# 默认：ByteDance processed interactions，缺失时自动下载
-python preprocess_amazon_books.py \
+# 1. 生成序列数据
+python examples/generative/data/amazon-books/preprocess_amazon_books.py \
     --data_source bytedance \
-    --data_dir . \
-    --output_dir ./processed \
     --max_seq_len 200 \
     --min_seq_len 5
 
-# 使用 Stanford SNAP raw interactions
-python preprocess_amazon_books.py \
-    --data_source raw \
-    --data_dir . \
-    --output_dir ./processed
-
-# 只使用本地已有文件
-python preprocess_amazon_books.py \
+# 2. 生成文本映射与 item embeddings
+python examples/generative/data/amazon-books/preprocess_amazon_books_hllm.py \
     --data_source bytedance \
-    --no_download \
-    --data_dir . \
-    --output_dir ./processed
-```
-
-**输出文件**：
-- `vocab.pkl` - 产品 ID 词表
-- `train_data.pkl` - 训练序列
-- `val_data.pkl` - 验证序列
-- `test_data.pkl` - 测试序列
-
-**数据格式**：每个数据文件包含一个字典，包含以下列表：
-- `seq_tokens`：序列中的产品 ID
-- `seq_positions`：位置索引
-- `seq_time_diffs`：与查询时间的时间差（秒）
-- `targets`：目标产品 ID
-
-**本地交互文件名**：
-- `raw`：`ratings_Books.csv`
-- `bytedance`：默认下载为 `amazon_books_interactions.csv`；手动下载时也接受 `amazon_books.csv` 作为 fallback
-- 支持 `user_id,item_id,rating,timestamp` 和 `item_id,user_id,timestamp` 两种列格式
-- `raw` 默认按 `--min_interactions` 过滤稀疏用户和物品；`bytedance` 默认保留官方已处理交互
-
-**2.2 生成 HLLM 数据（文本提取 + embedding 生成）**
-
-```bash
-# 默认：ByteDance processed item information，缺失时自动下载
-python preprocess_amazon_books_hllm.py \
-    --data_source bytedance \
-    --data_dir . \
-    --output_dir ./processed \
     --model_type tinyllama \
     --device cuda
 
-# 使用 Stanford SNAP raw metadata
-python preprocess_amazon_books_hllm.py \
-    --data_source raw \
-    --data_dir . \
-    --output_dir ./processed \
-    --model_type tinyllama \
-    --device cuda
-
-# 只使用本地已有 item information
-python preprocess_amazon_books_hllm.py \
-    --data_source bytedance \
-    --no_download \
-    --data_dir . \
-    --output_dir ./processed \
-    --model_type tinyllama \
-    --device cuda
-```
-
-**支持的 LLM 模型**：
-- `tinyllama`：TinyLlama-1.1B（推荐，~3GB 显存）
-- `baichuan2`：Baichuan2-7B（更大，~14GB 显存）
-
-**输出文件**：
-- `item_text_map.pkl` - 产品 ID 到文本描述的映射
-- `item_embeddings_tinyllama.pt` 或 `item_embeddings_baichuan2.pt` - 预计算的 item embeddings
-
-**本地 item information 文件名**：
-- `raw`：`meta_Books.json.gz` 或 `meta_Books.json`
-- `bytedance`：默认下载为 `item_information.csv`；手动下载时也接受 `amazon_books_items.csv`，或包含 `item_id,description,title` 列的 `amazon_books.csv`
-
-**Item 文本格式**（遵循官方 ByteDance HLLM 格式）：
-```
-"Compress the following sentence into embedding: title: {title}description: {description}"
-```
-
-**格式说明**：
-- 使用官方 `item_prompt` 前缀
-- 使用 `key: value` 格式，字段之间无分隔符
-- 使用最后一个 token 的隐藏状态作为 embedding
-
-#### 步骤 3：训练模型
-
-```bash
-cd ../../../..
+# 3. 训练与评估
 python examples/generative/run_hllm_amazon_books.py \
+    --data_dir examples/generative/data/amazon-books/processed \
     --model_type tinyllama \
     --batch_size 64 \
     --epochs 5 \
-    --device cuda
-```
-
-**高级选项**：
-
-```bash
-python examples/generative/run_hllm_amazon_books.py \
-    --model_type baichuan2 \
-    --batch_size 32 \
-    --epochs 10 \
     --learning_rate 1e-3 \
-    --n_layers 4 \
+    --n_layers 2 \
     --dropout 0.1 \
     --max_seq_len 200 \
+    --loss_type nce \
     --device cuda
 ```
 
-**参数说明**：
-- `--model_type`：LLM 模型类型（tinyllama 或 baichuan2），决定使用哪个 item embeddings 文件
-- `--batch_size`：批大小（默认 64）
-- `--epochs`：训练轮数（默认 10）
-- `--learning_rate`：学习率（默认 1e-3）
-- `--n_layers`：Transformer 层数（默认 2）
-- `--dropout`：Dropout 比率（默认 0.1）
-- `--max_seq_len`：最大序列长度（默认 200）
-- `--loss_type`：损失函数类型（`nce` 或 `cross_entropy`，默认 `nce`）
-- `--device`：计算设备（cuda 或 cpu）
+Amazon 预处理输出为：
 
-**官方配置参考**：
-```python
-# ByteDance HLLM 官方默认配置
-DEFAULT_CONFIG = {
-    'MAX_ITEM_LIST_LENGTH': 50,    # 最大序列长度
-    'MAX_TEXT_LENGTH': 256,         # 最大文本长度
-    'item_emb_token_n': 1,          # Item embedding token 数量
-    'loss': 'nce',                  # 损失函数
-    'num_negatives': 512,           # 负采样数量
-    'learning_rate': 1e-4,          # 学习率
-    'weight_decay': 0.01,           # 权重衰减
-    'epochs': 5,                    # 训练轮数
-}
+```text
+vocab.pkl
+train_data.pkl
+val_data.pkl
+test_data.pkl
+item_text_map.pkl
+item_embeddings_tinyllama.pt
 ```
 
-**预期时间**：
-- 数据预处理：~60-120 分钟（数据量较大）
-- 模型训练（5 个 epoch）：~150-200 分钟
-- 总计：~3-5 小时
+重新运行预处理会重写输出目录中的映射、split 和 embedding 文件。`--overwrite` 只描述下载文件的覆盖行为；要保留已有实验产物，请先备份或换一个 `--output_dir`。
 
-**性能参考**：
-- HSTU 预处理：~10-20 分钟
-- HLLM 预处理（TinyLlama）：~60-90 分钟
-- HLLM 预处理（Baichuan2）：~120-180 分钟
-- 训练时间（TinyLlama）：~30-40 分钟/epoch
-- 训练时间（Baichuan2）：~60-80 分钟/epoch
+## 6. 资源与评估注意事项
 
-### 5.5 常见问题与解决方案
+- HLLM 前向会生成 `[B, L, V]` 全词表 logits。Amazon Books 的词表很大，显存通常比“只存 item embedding”高得多；OOM 时优先降低 `--batch_size` 与 `--max_seq_len`。
+- TinyLlama/Baichuan2 只在离线 embedding 生成阶段运行；训练阶段使用预计算 embedding，但 2048/4096 维 User Transformer 本身仍然较大。
+- 训练脚本报告 `SeqTrainer.evaluate()` 的 full-sequence loss、held-out top-1 accuracy，并额外计算 HR/NDCG@10/50/200。
+- HLLM 示例的 ranking 评估当前没有像 HSTU 示例那样屏蔽 PAD 与历史已看 item。若要做论文或线上口径比较，应先统一候选集合与过滤协议。
+- 时间和显存受硬件、词表规模、序列长度与缓存状态影响；本文不提供未经基准脚本验证的固定耗时或百分比提升。
 
-#### Q1：GPU 内存不足
+## 7. 与官方端到端 HLLM 的边界
 
-**错误信息**：`RuntimeError: CUDA out of memory`
+当前仓库可以验证的能力：
 
-**解决方案**：
-1. 减小 batch_size：`--batch_size 256` 或 `--batch_size 128`
-2. 使用更小的 LLM 模型：`--model_type tinyllama`
-3. 减小 max_seq_len：`--max_seq_len 100`
-4. 使用 CPU：`--device cpu`（速度会很慢）
+- item 文本 embedding 按 token id 对齐并冻结；
+- causal User Transformer 输出全词表 cosine logits；
+- 支持 MovieLens-1M 与 Amazon Books 的预处理、训练和 top-k 评估示例；
+- 单机 `SeqTrainer` 可选择全词表 CE 或当前名为 `NCELoss` 的全词表分类损失。
 
-#### Q2：模型下载失败
+当前未实现或未对齐的部分：
 
-**错误信息**：`Connection error` 或 `Model not found`
+- Item LLM 与 User LLM 的端到端联合训练；
+- 官方大模型架构、可学习 item embedding token 与训练配置的逐项复刻；
+- sampled NCE / hard negatives；
+- DeepSpeed 或分布式训练；
+- padding attention mask、统一的候选过滤和论文指标复现实验；
+- 多步自回归解码与生产推理服务。
 
-**解决方案**：
-1. 检查网络连接
-2. 设置 HuggingFace 镜像：
-   ```bash
-   export HF_ENDPOINT=https://huggingface.co
-   ```
-3. 手动下载模型：
-   ```bash
-   # 使用 huggingface-cli
-   huggingface-cli download TinyLlama/TinyLlama-1.1B-Chat-v1.0
-   ```
-
-#### Q3：数据文件未找到
-
-**错误信息**：`FileNotFoundError: movies.dat not found`
-
-**解决方案**：
-1. 直接运行 `examples/generative/data/ml-1m/preprocess_ml_hstu.py`，默认会自动下载并解压 MovieLens-1M
-2. 如果使用 `--no_download`，确保 `ratings.dat`、`movies.dat`、`users.dat` 位于 `examples/generative/data/ml-1m/` 或 `--data_dir` 指定目录
-3. 检查文件名是否正确（区分大小写）
-
-#### Q4：Item embeddings 文件不存在
-
-**错误信息**：`FileNotFoundError: item_embeddings_tinyllama.pt not found`
-
-**解决方案**：
-1. 确保已运行 `preprocess_hllm_data.py`
-2. 检查输出目录是否正确：`examples/generative/data/ml-1m/processed/`
-3. 确保 `--model_type` 参数与生成的文件名一致
-
-#### Q5：训练速度很慢
-
-**原因**：
-- 使用了 CPU 而非 GPU
-- GPU 显存不足，频繁进行内存交换
-- Batch size 过小
-
-**解决方案**：
-1. 确保使用 GPU：`--device cuda`
-2. 增加 batch_size：`--batch_size 1024`（如果显存允许）
-3. 检查 GPU 利用率：`nvidia-smi`
-
-#### Q6：评估指标很低
-
-**原因**：
-- 训练轮数不足
-- 学习率设置不当
-- 模型容量不足
-
-**解决方案**：
-1. 增加训练轮数：`--epoch 10` 或 `--epoch 20`
-2. 调整学习率：`--learning_rate 5e-4` 或 `--learning_rate 1e-4`
-3. 使用更大的 LLM 模型：`--model_type baichuan2`
-
-### 5.6 切换 LLM 模型
-
-在 `run_hllm_movielens.py` 中修改 `--model_type` 参数：
-
-- `--model_type tinyllama`：使用 TinyLlama-1.1B（推荐用于 GPU 内存有限的场景）
-- `--model_type baichuan2`：使用 Baichuan2-7B（更大的模型，效果可能更好）
-
-**注意**：必须先运行 `preprocess_hllm_data.py` 生成相应的 embeddings 文件
-
----
-
-## 6. 与 ByteDance 官方实现的一致性与差异
-
-### 6.1 完全对齐的部分（100% 一致）✅
-
-#### 模型架构
-- ✅ **两级结构**：Item LLM 离线生成 embeddings，User LLM 在线建模序列
-- ✅ **Transformer Block**：多头自注意力 + FFN，前置归一化，残差连接
-- ✅ **因果掩码**：位置 i 只能 attend 到位置 ≤ i
-- ✅ **Scoring Head**：点积 + 温度缩放计算 logits
-
-#### 位置和时间编码
-- ✅ **位置编码**：绝对位置编码 `nn.Embedding(max_seq_len, d_model)`
-- ✅ **时间编码**：时间差转换为分钟，使用 sqrt/log bucket 化
-- ✅ **相对位置偏置**：支持相对位置编码
-
-#### Item 文本格式（✅ 已更新与官方一致）
-- ✅ **提示词前缀**：`"Compress the following sentence into embedding: "`
-- ✅ **MovieLens-1M**：`"Compress the following sentence into embedding: title: {title}genres: {genres}"`
-- ✅ **Amazon Books**：`"Compress the following sentence into embedding: title: {title}description: {description}"`
-- ✅ 使用最后一个 token 的隐藏状态（与官方一致）
-
-#### 数据处理
-- ✅ **HSTU 格式**：seq_tokens, seq_positions, seq_time_diffs, targets
-- ✅ **MovieLens 数据划分**：按用户划分，默认 70% train、10% val、20% test
-- ✅ **Amazon Books 数据划分**：leave-one-out，最后一个 item 用于 test，倒数第二个 item 用于 val，前缀样本用于 train
-- ✅ **序列构建**：按时间戳排序的用户交互序列
-
-### 6.2 有意简化的部分（合理优化）⚠️
-
-1. **LLM 模型支持**
-   - 官方：支持多种 LLM（Llama-2、Qwen 等）
-   - 本实现：仅支持 TinyLlama-1.1B 和 Baichuan2-7B
-   - **原因**：两个模型已足够演示，简化依赖管理
-
-2. **模型规模**
-   - 官方：可能使用 4-12 层 Transformer
-   - 本实现：默认 n_layers=2
-   - **原因**：用于快速演示，可通过参数调整
-
-3. **训练轮数**
-   - 官方：10-50 轮
-   - 本实现：默认 epoch/epochs=10
-   - **原因**：用于快速演示，可通过参数调整
-
-4. **文本处理**
-   - 官方：可能包含 BM25、多字段融合等复杂处理
-   - 本实现：简单的字符串拼接
-   - **原因**：基础文本处理已足够，可按需扩展
-
-### 6.3 发现的不一致之处（需要关注）❌
-
-#### 1. Loss 函数 ✅ **已实现**
-- **当前**：✅ NCE Loss（Noise Contrastive Estimation）+ CrossEntropyLoss（可选）
-- **官方**：NCE Loss（Noise Contrastive Estimation）
-- **影响**：训练效率，NCE Loss 提高训练速度 30-50%
-- **状态**：✅ 已完全对齐
-
-#### 2. 负采样策略 ✅ **已实现**
-- **当前**：✅ In-batch negatives 策略
-- **官方**：使用 in-batch negatives 或 hard negatives
-- **影响**：模型性能，提升 5-10%
-- **状态**：✅ 已完全对齐
-
-#### 3. Embedding 提取方式 ✅ **已对齐**
-- **当前**：✅ 使用最后一个 token 的隐藏状态
-- **官方**：使用 `item_emb_token_n` 个可学习 token（默认为 1）
-- **影响**：结果可复现性
-- **状态**：✅ 已对齐（使用最后一个 token，与官方一致）
-
-#### 4. 分布式训练 🟡 **中等优先级**
-- **当前**：单机训练
-- **官方**：使用 DeepSpeed 进行分布式训练
-- **影响**：大规模数据集支持
-- **建议**：可选的改进，不影响核心功能
-
-### 6.4 对齐度评分
-
-| 维度           | 对齐度    | 说明                                |
-| -------------- | --------- | ----------------------------------- |
-| 模型架构       | ✅ 100%    | 完全对齐                            |
-| 位置编码       | ✅ 100%    | 完全对齐                            |
-| 时间编码       | ✅ 100%    | 完全对齐                            |
-| Item 文本格式  | ✅ 100%    | 完全对齐（已更新为官方格式）        |
-| Embedding 提取 | ✅ 100%    | 完全对齐（使用最后 token 隐藏状态） |
-| 数据预处理     | ✅ 100%    | 完全对齐（已修复数据格式）          |
-| 训练配置       | ✅ 100%    | NCE Loss + 负采样已实现             |
-| 训练脚本       | ✅ 100%    | 已修复参数定义问题                  |
-| LLM 支持       | ⚠️ 80%     | 仅支持 2 种模型                     |
-| 分布式训练     | ⚠️ 60%     | 未实现 DeepSpeed                    |
-| **总体对齐度** | **✅ 97%** | 核心功能完全对齐                    |
-
-### 6.5 未实现的功能
-
-- 多任务学习头
-- 复杂的特征交叉（如 DLRM）
-- 多步自回归解码
-- 高级文本预处理（BM25、多字段融合）
-
----
-
-## 7. 性能与资源需求
-
-### 7.1 计算资源
-
-- **TinyLlama-1.1B**：约 2GB GPU 内存（用于 embedding 生成）
-- **Baichuan2-7B**：约 14GB GPU 内存（用于 embedding 生成）
-- **HLLM 训练**：约 4-8GB GPU 内存（取决于 batch_size 和 seq_len）
-
-### 7.2 时间成本
-
-- **Item embedding 生成**：TinyLlama 约 10-20 分钟，Baichuan2 约 30-60 分钟
-- **HLLM 训练**：5 个 epoch 约 30-60 分钟（取决于数据量和硬件）
-
----
-
-## 8. 总体评估
-
-### 8.1 实现质量评级
-
-**当前 HLLM 实现的正确性评级：⭐⭐⭐⭐⭐ (97% 对齐)**
-
-- ✅ **核心模型架构**：完全正确
-- ✅ **数据处理流程**：完全正确（已修复数据格式）
-- ✅ **Item 文本格式**：完全正确（已更新为官方格式）
-- ✅ **Embedding 提取**：完全正确（使用最后 token 隐藏状态）
-- ✅ **训练脚本**：完全正确（已修复参数定义问题）
-- ✅ **训练优化**：NCE Loss 和负采样已实现
-- ⚠️ **分布式支持**：未实现（可选改进）
-
-### 8.2 验证结果
-
-所有代码已通过验证：
-- ✅ 语法检查通过
-- ✅ 模块导入成功
-- ✅ 模型实例化成功
-- ✅ 训练脚本参数正确
-
-### 8.3 后续改进建议
-
-**高优先级**（影响性能）：
-1. 支持更多 LLM 模型（Llama-2、Qwen 等）
-2. 实现 DeepSpeed 进行分布式训练
-
-**中等优先级**（增强功能）：
-1. 增加文本预处理选项（BM25、多字段融合等）
-2. 支持更多数据集格式
-
-**低优先级**（优化体验）：
-1. 多任务学习头
-2. 复杂的特征交叉（如 DLRM）
-3. 多步自回归解码接口
-
-### 8.4 使用建议
-
-- ✅ **研究和教学**：当前实现已完全适合
-- ✅ **快速原型**：可直接使用
-- ✅ **生产环境**：核心功能已完全对齐，可直接使用
-- ⚠️ **大规模数据**：建议添加 DeepSpeed 支持以提高训练效率
+现有测试覆盖 item embedding 行号/维度校验和 cosine logits 范围，但不证明与官方实现的指标一致。因此更准确的定位是轻量研究示例，而不是“97% 对齐”或可直接生产部署的官方复现。

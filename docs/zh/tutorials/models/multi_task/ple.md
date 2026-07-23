@@ -172,8 +172,8 @@ mtl_trainer.fit(train_dl, val_dl)
 |------|----------------|------|
 | 等权重 | 不设置 | 简单加和各任务 Loss |
 | UWL | `{"method": "uwl"}` | Uncertainty Weighting Loss |
-| GradNorm | `{"method": "gradnorm"}` | 梯度归一化 |
-| MetaBalance | `{"method": "metabalance"}` | MetaBalance 方法 |
+| GradNorm | `{"method": "gradnorm"}` | 当前 Trainer 分支存在未赋值 `loss`，暂不可用 |
+| MetaBalance | `{"method": "metabalance"}` | 当前 Trainer 分支存在未赋值 `loss`，暂不可用 |
 
 ---
 
@@ -181,7 +181,7 @@ mtl_trainer.fit(train_dl, val_dl)
 
 ```python
 auc = mtl_trainer.evaluate(mtl_trainer.model, test_dl)
-print(f"Test AUC (CTR): {auc[0]:.4f}, Test AUC (CVR): {auc[1]:.4f}")
+print(f"Test AUC (CVR): {auc[0]:.4f}, Test AUC (CTR): {auc[1]:.4f}")
 ```
 
 ---
@@ -190,7 +190,7 @@ print(f"Test AUC (CTR): {auc[0]:.4f}, Test AUC (CVR): {auc[1]:.4f}")
 
 1. **CGC 层数** (`n_level`): 1~2 层通常足够，更多层可能过拟合
 2. **Expert 数量**: `n_expert_specific` 通常 2~4，`n_expert_shared` 通常 1~2
-3. **损失平衡**: UWL 是推荐的起点，如果任务间梯度冲突严重，可以尝试 GradNorm
+3. **损失平衡**: 当前可使用 UWL；GradNorm 和 MetaBalance 需等待 Trainer 修正后再启用
 4. **Tower 结构**: 保持较浅（1~2 层），因为 Expert 已经完成了特征提取
 
 ---
@@ -301,7 +301,7 @@ def main():
 
     # 6. 评估
     auc = mtl_trainer.evaluate(mtl_trainer.model, test_dl)
-    print(f"Test AUC (CTR): {auc[0]:.4f}, Test AUC (CVR): {auc[1]:.4f}")
+    print(f"Test AUC (CVR): {auc[0]:.4f}, Test AUC (CTR): {auc[1]:.4f}")
 
 
 if __name__ == "__main__":

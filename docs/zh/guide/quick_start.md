@@ -105,7 +105,7 @@ trainer = CTRTrainer(
 # 当前 Trainer 不会自动创建保存目录，所以这里先手动创建
 os.makedirs("./saved/quick_start_deepfm", exist_ok=True)
 trainer.fit(train_dl, val_dl)
-# evaluate 建议传 trainer.model，确保使用的是验证后保存的最优权重
+# evaluate 需要显式传入待评估的模型
 auc = trainer.evaluate(trainer.model, test_dl)
 print(f"测试集 AUC: {auc:.4f}")
 ```
@@ -114,7 +114,7 @@ print(f"测试集 AUC: {auc:.4f}")
 
 ```bash
 cd examples/ranking
-python run_criteo.py --model_name deepfm --epoch 2 --device cuda:0
+python run_criteo.py --model_name deepfm --epoch 2 --device cpu
 ```
 
 ---
@@ -267,7 +267,7 @@ print(f"物品向量形状: {item_embedding.shape}")
 
 ```bash
 cd examples/matching
-python run_ml_dssm.py --epoch 2 --device cuda:0
+python run_ml_dssm.py --epoch 2 --device cpu
 ```
 
 如果你在 Windows / Notebook 环境下运行脚本时遇到 DataLoader 多进程问题，更推荐直接执行上面的 Python 代码块，因为当前脚本没有暴露 `num_workers` 参数，而召回场景通常需要显式设置 `num_workers=0`。
@@ -317,5 +317,5 @@ trainer.export_onnx("item_tower.onnx", mode="item")
 
 ```bash
 cd examples/ranking
-python run_criteo.py --model_name deepfm --epoch 1 --device cuda:0
+python run_criteo.py --model_name deepfm --epoch 1 --device cpu
 ```

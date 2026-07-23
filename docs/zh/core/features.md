@@ -22,7 +22,7 @@ dense_feature = DenseFeature(name="age", embed_dim=1)
 
 **参数说明：**
 - `name`：特征名称
-- `embed_dim`：嵌入向量长度，固定为1
+- `embed_dim`：输入维度，标量特征默认为 1；如果该字段本身是向量，应设为实际向量维度
 
 ## SparseFeature
 
@@ -60,7 +60,8 @@ sequence_feature = SequenceFeature(
     name="user_history",
     vocab_size=10000,  # 词汇表大小
     embed_dim=32,       # 嵌入向量长度
-    pooling="mean"       # 池化方式：mean, sum, concat
+    pooling="mean",      # 池化方式：mean, sum, concat
+    padding_idx=0,       # 序列中用 0 补齐
 )
 ```
 
@@ -68,10 +69,54 @@ sequence_feature = SequenceFeature(
 - `name`：特征名称
 - `vocab_size`：词汇表大小
 - `embed_dim`：嵌入向量长度，若为None则自动计算
-- `pooling`：池化方式，支持mean、sum、concat
+- `pooling`：支持 `mean`、`sum`、`concat`；`mean/sum` 把 `(batch_size, seq_len, embed_dim)` 压缩为 `(batch_size, embed_dim)`，`concat` 保留原序列维度
 - `shared_with`：共享嵌入表的其他特征名称
 - `padding_idx`：填充索引，在InputMask层中会被掩码为0
 - `initializer`：嵌入层权重初始化器
+
+## 模型输入约定
+
+Feature 对象只定义模型如何解读字段，不会自动对原始数据做类别编码或序列补齐。传入模型的字典需满足：
+
+| 特征类型 | 常用形状 | 值的约定 |
+|---|---|---|
+| `DenseFeature` | `(batch_size,)` 或 `(batch_size, embed_dim)` | 可转换为浮点数 |
+| `SparseFeature` | `(batch_size,)` | 整数索引，范围为 `[0, vocab_size)` |
+| `SequenceFeature` | `(batch_size, seq_len)` | 整数索引，需在进入模型前补齐到相同长度 |
+
+当序列用 `0` 补齐时，应显式设置 `padding_idx=0`，否则默认掩码会把 `-1` 而不是 `0` 视为填充值。
+
+使用 `shared_with="item_id"` 时，同一个 `EmbeddingLayer` 的特征列表中必须同时存在名为 `item_id` 且自己创建 Embedding 的特征；实际使用的词表大小和嵌入维度由被共享的 Embedding 表决定。
+
+## Embedding 初始化
+
+`initializer` 需要传入一个可调用的初始化器实例。项目内置 `RandomNormal`、`RandomUniform`、`XavierNormal`、`XavierUniform` 和 `Pretrained`；`SparseFeature` 与 `SequenceFeature` 默认使用 `RandomNormal(0, 0.0001)`。
+
+```python
+import torch
+
+from torch_rechub.basic.features import SparseFeature
+from torch_rechub.basic.initializers import XavierUniform, Pretrained
+
+random_feature = SparseFeature(
+    name="item_id",
+    vocab_size=1000,
+    embed_dim=32,
+    padding_idx=0,
+    initializer=XavierUniform(gain=1.0),
+)
+
+weights = torch.randn(1000, 32)
+pretrained_feature = SparseFeature(
+    name="pretrained_item_id",
+    vocab_size=1000,
+    embed_dim=32,
+    padding_idx=0,
+    initializer=Pretrained(weights, freeze=False),
+)
+```
+
+`Pretrained` 会校验权重形状与 `vocab_size/embed_dim` 完全一致；`freeze=True` 是默认值，表示训练时不更新该 Embedding。对于内置的随机/Xavier 初始化器，设置 `padding_idx` 后对应行会被置零。
 
 ## Feature 实例与 Embedding 所有权
 
@@ -122,7 +167,13 @@ sparse_features = [
 ]
 
 sequence_features = [
-    SequenceFeature(name="user_history", vocab_size=10000, embed_dim=32, pooling="mean")
+    SequenceFeature(
+        name="user_history",
+        vocab_size=10000,
+        embed_dim=32,
+        pooling="mean",
+        padding_idx=0,
+    )
 ]
 
 # 合并所有特征

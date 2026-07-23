@@ -18,8 +18,8 @@ pip install "torch-rechub[onnx]"
 ```
 
 说明：
-- `torch-rechub[onnx]` 会安装 `onnx`、`onnxruntime`，以及用于 FP16 转换的 `onnxconverter-common`。
-- 如需 GPU 推理，请自行安装对应 CUDA 版本的 `onnxruntime-gpu`（与本机 CUDA/驱动匹配）。
+- `torch-rechub[onnx]` 会安装 `ml-dtypes`、`onnx`、`onnxscript`、`onnxruntime`，以及用于 FP16 转换的 `onnxconverter-common`。
+- 如需 GPU 推理，请改用与本机 CUDA/驱动匹配的 `onnxruntime-gpu`，并确认环境中实际导入的是期望的 Runtime 变体。
 
 ## 导出 ONNX（训练器 export_onnx）
 
@@ -58,24 +58,24 @@ trainer.export_onnx("mmoe.onnx")
 
 ### 导出参数与高级控制（onnx_export_kwargs）
 
-如需调整 `torch.onnx.export()` 的高级参数（例如某些算子导出策略、常量折叠、导出器选择等），可以通过 `onnx_export_kwargs` 透传：
+如需选择导出器或传入封装尚未占用的 `torch.onnx.export()` 参数，可以通过 `onnx_export_kwargs` 透传：
 
 ```python
 trainer.export_onnx(
     "model.onnx",
     dynamic_batch=True,  # 动态 batch size（推荐）
     onnx_export_kwargs={
-        "do_constant_folding": True,
-        # "operator_export_type": torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK,
-        # "dynamo": False,  # 需要动态轴时通常建议关闭（见下文说明）
+        "dynamo": False,  # 此处演示强制使用 legacy 导出器
     },
 )
 ```
 
+`f`、`input_names`、`output_names`、`opset_version`、`do_constant_folding`、`verbose` 和自动生成的 `dynamic_axes` 已由封装设置，不得在 `onnx_export_kwargs` 中重复传入，否则会抛出 `ValueError`。
+
 导出器选择建议：
-- **需要动态 batch（或动态序列长度）**：优先使用 legacy 导出（`dynamo=False`），更稳定地支持 `dynamic_axes`。
-- **输入 shape 固定**：可尝试 `dynamo=True` 获取更好的导出覆盖率（不同 torch 版本表现不同）。
-- **老版本 PyTorch**：可能不支持 `dynamo` 参数；Torch-RecHub 会自动兼容（不传该参数）。
+- **CTR / Matching / MTL**：默认先尝试 `dynamo=True`，动态 batch 通过 `dynamic_shapes` 表达；失败时会自动回退到 legacy 导出器与 `dynamic_axes`。
+- **SeqTrainer**：动态 batch/序列长度默认使用 legacy 导出器；固定 shape 时可按需显式传 `dynamo=True`。
+- **老版本 PyTorch**：若不支持 `dynamo`，导出器会忽略该参数并使用兼容路径。不同 PyTorch 版本的算子覆盖仍可能不同。
 
 ### 查看 ONNX 模型结构
 
@@ -93,16 +93,16 @@ trainer.export_onnx(
 - **INT8 动态量化（Dynamic Quantization）**：主要对 Linear/MatMul 等权重做 INT8，通常对 **CPU** 推理加速明显，且精度损失可控。
 - **FP16 转换**：对支持 Tensor Core 的 GPU 推理更友好，能降低显存占用并提升吞吐。
 
-Torch-RecHub 在 `torch_rechub.utils` 提供统一 API：
+Torch-RecHub 在量化模块提供统一 API：
 
 ```python
-from torch_rechub.utils import quantize_model
+from torch_rechub.utils.quantization import quantize_model
 ```
 
 ### 1) INT8 动态量化（推荐 CPU）
 
 ```python
-from torch_rechub.utils import quantize_model
+from torch_rechub.utils.quantization import quantize_model
 
 quantize_model(
     input_path="model_fp32.onnx",
@@ -121,7 +121,7 @@ quantize_model(
 ### 2) FP16 转换（推荐 GPU）
 
 ```python
-from torch_rechub.utils import quantize_model
+from torch_rechub.utils.quantization import quantize_model
 
 quantize_model(
     input_path="model_fp32.onnx",
@@ -152,4 +152,6 @@ python examples/serving/benchmark_onnx_quantization.py --fp32 model_fp32.onnx --
 ```
 
 脚本会根据 ONNX 输入签名自动构造 dummy inputs（适合做快速的端到端性能 sanity check）。
+
+> 导出成功只说明模型文件已生成。上线前还应使用真实样本分别运行 PyTorch 与 ONNX Runtime，核对输出形状、数值误差和动态 batch，并在量化后重新评估业务指标；基准脚本不会替代这些一致性检查。
 

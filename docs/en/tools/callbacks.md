@@ -15,7 +15,9 @@ EarlyStopper is an early stopping utility that stops training when validation pe
 
 - Monitor validation metrics (e.g., AUC)
 - Trigger early stopping when metrics don't improve for consecutive epochs
-- Automatically save best model weights
+- Keep a deep copy of the best model weights in memory
+
+`EarlyStopper` always uses higher-is-better AUC semantics, so it is not suitable for directly monitoring a loss that should be minimized. It does not write anything to disk. If training reaches the maximum epoch without triggering early stopping, the Trainer does not automatically restore the best weights held in memory.
 
 ### Usage
 
@@ -74,7 +76,11 @@ Determine whether to stop training.
 Torch-RecHub trainers have built-in early stopping functionality, controlled via the `earlystop_patience` parameter:
 
 ```python
+from pathlib import Path
 from torch_rechub.trainers import CTRTrainer
+
+model_dir = Path("saved/model")
+model_dir.mkdir(parents=True, exist_ok=True)
 
 trainer = CTRTrainer(
     model=model,
@@ -82,7 +88,7 @@ trainer = CTRTrainer(
     n_epoch=50,
     earlystop_patience=10,  # Early stopping patience
     device="cuda:0",
-    model_path="saved/model"
+    model_path=str(model_dir)
 )
 
 trainer.fit(train_dataloader, val_dataloader)
@@ -116,13 +122,19 @@ trainer.fit(train_dl, val_dl)
 # Method 2: Manual EarlyStopper usage
 early_stopper = EarlyStopper(patience=10)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+criterion = torch.nn.BCELoss()
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+model.to(device)
 
 for epoch in range(50):
     model.train()
-    for batch in train_dl:
+    for x_dict, y in train_dl:
         # Training step
+        x_dict = {name: value.to(device) for name, value in x_dict.items()}
+        y = y.float().to(device)
         optimizer.zero_grad()
-        loss = model(batch)
+        prediction = model(x_dict)
+        loss = criterion(prediction, y.view_as(prediction))
         loss.backward()
         optimizer.step()
 
@@ -150,6 +162,6 @@ for epoch in range(50):
    - Use `scheduler_fn` and `scheduler_params` to configure learning rate scheduler
 
 3. **Save checkpoints**:
-   - Early stopper automatically saves best weights
-   - Also recommend using `model_path` parameter to save model to disk
+   - The early stopper keeps the best weights only in memory; call `load_state_dict` explicitly when needed
+   - The Trainer writes weights to `model_path` when `fit()` finishes, but the directory must already exist; if early stopping did not trigger, it writes the weights from the final epoch
 

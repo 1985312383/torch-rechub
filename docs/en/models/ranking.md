@@ -75,6 +75,8 @@ Guo, Huifeng, et al. "DeepFM: a factorization-machine based neural network for C
 ### Usage
 
 ```python
+import os
+
 from torch_rechub.models.ranking import DeepFM
 
 model = DeepFM(
@@ -123,10 +125,9 @@ Wang, Ruoxi, et al. "Deep & cross network for ad click predictions." Proceedings
 from torch_rechub.models.ranking import DCN
 
 model = DCN(
-    deep_features=sparse_features + dense_features,
-    cross_features=sparse_features,
+    features=sparse_features + dense_features,
+    n_cross_layers=3,
     mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    cross_num_layers=3
 )
 ```
 
@@ -134,10 +135,9 @@ model = DCN(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| cross_features | list | Feature list for Cross part | None |
+| features | list | Features shared by the Cross and Deep branches | required |
 | mlp_params | dict | DNN parameters | None |
-| cross_num_layers | int | Number of Cross Network layers | 3 |
+| n_cross_layers | int | Number of Cross Network layers | required |
 
 ### Use Cases
 
@@ -149,7 +149,7 @@ model = DCN(
 
 ### Description
 
-DCNv2 is an enhanced version of DCN, introducing feature selection units and dynamic scaling mechanisms for improved expressiveness and efficiency.
+DCNv2 extends DCN's scalar/vector cross parameters to matrix interactions. This implementation can also use a mixture of low-rank experts to reduce the cost of a full matrix interaction.
 
 ### Paper Reference
 
@@ -159,9 +159,9 @@ Wang, Ruoxi, et al. "DCN V2: Improved deep & cross network and practical lessons
 
 ### Core Principles
 
-- **Feature Selection Unit**: Assigns dynamic weights to each feature, automatically selecting important features
-- **Dynamic Scaling**: Introduces scalar parameters to adaptively adjust feature cross contributions
-- **Flexible Cross Network**: Supports different cross forms
+- **Matrix-form crossing**: More expressive than DCN's vector-form crossing
+- **Low-rank expert mixture**: Uses multiple low-rank Cross experts when `use_low_rank_mixture=True`
+- **Selectable structure**: Supports `crossnet_only`, `stacked`, and `parallel`
 
 ### Usage
 
@@ -169,10 +169,13 @@ Wang, Ruoxi, et al. "DCN V2: Improved deep & cross network and practical lessons
 from torch_rechub.models.ranking import DCNv2
 
 model = DCNv2(
-    deep_features=sparse_features + dense_features,
-    cross_features=sparse_features,
+    features=sparse_features + dense_features,
+    n_cross_layers=3,
     mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    cross_num_layers=3
+    model_structure="parallel",       # crossnet_only / stacked / parallel
+    use_low_rank_mixture=True,
+    low_rank=32,
+    num_experts=4,
 )
 ```
 
@@ -180,10 +183,13 @@ model = DCNv2(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| cross_features | list | Feature list for Cross part | None |
+| features | list | Features shared by the Cross and Deep branches | required |
 | mlp_params | dict | DNN parameters | None |
-| cross_num_layers | int | Number of Cross Network layers | 3 |
+| n_cross_layers | int | Number of Cross Network layers | required |
+| model_structure | str | `crossnet_only` / `stacked` / `parallel` | `parallel` |
+| use_low_rank_mixture | bool | Whether to use a mixture of low-rank CrossNet experts | True |
+| low_rank | int | Low-rank dimension | 32 |
+| num_experts | int | Number of CrossNetMix experts | 4 |
 
 ### Use Cases
 
@@ -215,10 +221,11 @@ Ma, Xiao, et al. "Enhanced Deep & Cross Network for Feature Cross Learning in Cl
 from torch_rechub.models.ranking import EDCN
 
 model = EDCN(
-    deep_features=sparse_features + dense_features,
-    cross_features=sparse_features,
+    features=sparse_features + dense_features,
+    n_cross_layers=3,
     mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
-    cross_num_layers=3
+    bridge_type="hadamard_product",
+    use_regulation_module=True,
 )
 ```
 
@@ -226,10 +233,11 @@ model = EDCN(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| cross_features | list | Feature list for Cross part | None |
+| features | list | All features used by the model | required |
 | mlp_params | dict | DNN parameters | None |
-| cross_num_layers | int | Number of Cross Network layers | 3 |
+| n_cross_layers | int | Number of Cross Network layers | required |
+| bridge_type | str | Bridge between the Cross and Deep streams | `hadamard_product` |
+| use_regulation_module | bool | Whether to enable the feature regulation module | True |
 
 ### Use Cases
 
@@ -261,9 +269,9 @@ Xiao, Jun, et al. "Attentional factorization machines: Learning the weight of fe
 from torch_rechub.models.ranking import AFM
 
 model = AFM(
-    deep_features=sparse_features + dense_features,
     fm_features=sparse_features,
-    attention_params={"attention_dim": 64, "dropout": 0.2}
+    embed_dim=16,  # must match the embedding width of fm_features
+    t=64,
 )
 ```
 
@@ -271,9 +279,9 @@ model = AFM(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| fm_features | list | Feature list for FM part | None |
-| attention_params | dict | Attention network parameters | None |
+| fm_features | list | Sparse features used for FM interactions; all embedding widths must match | required |
+| embed_dim | int | Feature embedding dimension | required |
+| t | int | Attention hidden dimension | 64 |
 
 ### Use Cases
 
@@ -305,9 +313,10 @@ Juan, Yuchin, et al. "FiBiNET: Combining Feature Importance and Bilinear feature
 from torch_rechub.models.ranking import FiBiNet
 
 model = FiBiNet(
-    deep_features=sparse_features + dense_features,
-    fm_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    features=sparse_features,
+    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"},
+    reduction_ratio=3,
+    bilinear_type="field_interaction",
 )
 ```
 
@@ -315,9 +324,10 @@ model = FiBiNet(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| fm_features | list | Feature list for FM part | None |
-| mlp_params | dict | DNN parameters | None |
+| features | list | Features used by SENET and bilinear interaction | required |
+| mlp_params | dict | Prediction MLP parameters | required |
+| reduction_ratio | int | SENET reduction ratio | 3 |
+| bilinear_type | str | `field_all` / `field_each` / `field_interaction` | `field_interaction` |
 
 ### Use Cases
 
@@ -348,17 +358,30 @@ Xiao, Jun, et al. "Deep learning over multi-field categorical data." European co
 ```python
 from torch_rechub.models.ranking import DeepFFM, FatDeepFFM
 
+# FFM uses a different embedding for every field pair, so cross-feature
+# vocabularies must reserve one offset range per field.
+ffm_linear_features = [
+    SparseFeature(f.name, vocab_size=f.vocab_size, embed_dim=1) for f in sparse_features
+]
+ffm_cross_features = [
+    SparseFeature(f.name, vocab_size=f.vocab_size * len(sparse_features), embed_dim=10)
+    for f in sparse_features
+]
+
 model = DeepFFM(
-    deep_features=sparse_features + dense_features,
-    fm_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    linear_features=ffm_linear_features,
+    cross_features=ffm_cross_features,
+    embed_dim=10,
+    mlp_params={"dims": [1600, 1600], "dropout": 0.5, "activation": "relu"},
 )
 
 # FatDeepFFM (enhanced version)
 fat_model = FatDeepFFM(
-    deep_features=sparse_features + dense_features,
-    fm_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    linear_features=ffm_linear_features,
+    cross_features=ffm_cross_features,
+    embed_dim=10,
+    reduction_ratio=1,
+    mlp_params={"dims": [1600, 1600], "dropout": 0.5, "activation": "relu"},
 )
 ```
 
@@ -366,9 +389,11 @@ fat_model = FatDeepFFM(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| fm_features | list | Feature list for FFM part | None |
-| mlp_params | dict | DNN parameters | None |
+| linear_features | list | First-order linear features, normally with `embed_dim=1` | required |
+| cross_features | list | FFM interaction features whose vocabularies reserve field-offset space | required |
+| embed_dim | int | FFM embedding dimension | required |
+| reduction_ratio | int | CEN reduction ratio, required only by FatDeepFFM | required (FatDeepFFM) |
+| mlp_params | dict | MLP parameters after FFM interactions | required |
 
 ### Use Cases
 
@@ -385,7 +410,7 @@ BST (Behavior Sequence Transformer) uses Transformer to model user behavior sequ
 ### Paper Reference
 
 ```
-Sun, Fei, et al. "BERT4Rec: Sequential recommendation with bidirectional encoder representations from transformer." Proceedings of the 28th ACM international conference on information and knowledge management. 2019.
+Chen, Qiwei, et al. "Behavior Sequence Transformer for E-commerce Recommendation in Alibaba." arXiv preprint arXiv:1905.06874 (2019).
 ```
 
 ### Core Principles
@@ -397,14 +422,30 @@ Sun, Fei, et al. "BERT4Rec: Sequential recommendation with bidirectional encoder
 ### Usage
 
 ```python
+from torch_rechub.basic.features import SparseFeature, SequenceFeature
 from torch_rechub.models.ranking import BST
 
-sequence_features = [SequenceFeature(name="user_history", vocab_size=10000, embed_dim=32, pooling="mean")]
+features = [SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)]
+target_features = [
+    SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
+    SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
+]
+history_features = [
+    SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8,
+                    pooling="concat", shared_with="target_item_id"),
+    SequenceFeature("hist_cate_id", vocab_size=n_cates + 1, embed_dim=8,
+                    pooling="concat", shared_with="target_cate_id"),
+]
 
 model = BST(
-    deep_features=sparse_features + dense_features,
-    sequence_features=sequence_features,
-    transformer_params={"num_heads": 4, "num_layers": 2, "hidden_size": 128, "dropout": 0.2}
+    features=features,
+    history_features=history_features,
+    target_features=target_features,
+    mlp_params={"dims": [256, 128]},
+    nhead=8,
+    dropout=0.2,
+    num_layers=1,
+    max_seq_len=51,
 )
 ```
 
@@ -412,9 +453,14 @@ model = BST(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| sequence_features | list | Sequence feature list | None |
-| transformer_params | dict | Transformer parameters | None |
+| features | list | User-profile/context features, excluding history and target | required |
+| history_features | list | History sequences with `pooling="concat"` | required |
+| target_features | list | Target-item features corresponding to the history features | required |
+| mlp_params | dict | Prediction MLP parameters | required |
+| nhead | int | Attention heads; must divide the summed history embedding dimension | 8 |
+| dropout | float | Transformer dropout | 0.2 |
+| num_layers | int | Number of Transformer Encoder layers | 1 |
+| max_seq_len | int | Upper bound of history length plus one target | 51 |
 
 ### Use Cases
 
@@ -443,15 +489,22 @@ Zhou, Guorui, et al. "Deep interest network for click-through rate prediction." 
 ### Usage
 
 ```python
+from torch_rechub.basic.features import SparseFeature, SequenceFeature
 from torch_rechub.models.ranking import DIN
 
-sequence_features = [SequenceFeature(name="user_history", vocab_size=10000, embed_dim=32, pooling=None)]
+features = [SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)]
+target_features = [SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8)]
+history_features = [
+    SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8,
+                    pooling="concat", shared_with="target_item_id")
+]
 
 model = DIN(
-    deep_features=sparse_features + dense_features,
-    sequence_features=sequence_features,
-    target_features=sparse_features,
-    mlp_params={"dims": [256, 128, 64], "dropout": 0.2, "activation": "relu"}
+    features=features,
+    history_features=history_features,
+    target_features=target_features,
+    mlp_params={"dims": [256, 128]},
+    attention_mlp_params={"dims": [64, 32], "use_softmax": False},
 )
 ```
 
@@ -459,10 +512,11 @@ model = DIN(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| sequence_features | list | Sequence feature list | None |
-| target_features | list | Target feature list | None |
-| mlp_params | dict | DNN parameters | None |
+| features | list | User-profile/context features | required |
+| history_features | list | History sequences with `pooling="concat"` | required |
+| target_features | list | Target features matching history count, order, and dimensions | required |
+| mlp_params | dict | Prediction MLP parameters | required |
+| attention_mlp_params | dict | Activation Unit parameters | required |
 
 ### Use Cases
 
@@ -566,8 +620,12 @@ Song, Weiping, et al. "AutoInt: Automatic Feature Interaction Learning via Self-
 from torch_rechub.models.ranking import AutoInt
 
 model = AutoInt(
-    deep_features=sparse_features + dense_features,
-    attention_params={"num_heads": 4, "num_layers": 2, "hidden_size": 128, "dropout": 0.2}
+    sparse_features=sparse_features,
+    dense_features=dense_features,
+    num_layers=3,
+    num_heads=2,
+    dropout=0.2,
+    mlp_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
 )
 ```
 
@@ -575,8 +633,12 @@ model = AutoInt(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| deep_features | list | Feature list for Deep part | None |
-| attention_params | dict | Attention network parameters | None |
+| sparse_features | list | At least one sparse feature; all must use the same `embed_dim` | required |
+| dense_features | list | Dense features; may be an empty list | required |
+| num_layers | int | Number of Interacting Layers | 3 |
+| num_heads | int | Number of attention heads | 2 |
+| dropout | float | Attention dropout | 0.0 |
+| mlp_params | dict or None | Optional Deep-branch parameters | None |
 
 ### Use Cases
 
@@ -623,8 +685,8 @@ dense_features = [
 
 sparse_features = [
     SparseFeature(name="city", vocab_size=100, embed_dim=16),
-    SparseFeature(name="gender", vocab_size=3, embed_dim=8),
-    SparseFeature(name="occupation", vocab_size=20, embed_dim=12)
+    SparseFeature(name="gender", vocab_size=3, embed_dim=16),
+    SparseFeature(name="occupation", vocab_size=20, embed_dim=16)
 ]
 
 # 2. Prepare data
@@ -654,18 +716,19 @@ trainer = CTRTrainer(
     optimizer_params={"lr": 0.001, "weight_decay": 0.0001},
     n_epoch=50,
     earlystop_patience=10,
-    device="cuda:0",
+    device="cpu",
     model_path="saved/deepfm"
 )
 
 # 6. Train model
+os.makedirs("saved/deepfm", exist_ok=True)
 trainer.fit(train_dl, val_dl)
 
 # 7. Evaluate model
 auc = trainer.evaluate(trainer.model, test_dl)
 print(f"Test AUC: {auc}")
 
-# 8. Export ONNX model
+# 8. Export ONNX model (first install: pip install "torch-rechub[onnx]")
 trainer.export_onnx("deepfm.onnx")
 ```
 
@@ -689,9 +752,4 @@ A: Try the following:
 - Hierarchical embedding: Use different embedding dimensions for different features
 
 ### Q: How to speed up training?
-A: Try the following:
-- Use GPU training
-- Increase batch size
-- Use mixed precision training
-- Choose efficient models
-- Data parallel training
+A: `CTRTrainer` can use one GPU through `device`, or wrap the model in single-machine `torch.nn.DataParallel` through `gpus=[...]`. It does not provide automatic mixed precision (AMP) or multi-machine distributed training. Whether batch size can be increased depends on available memory; test it incrementally.

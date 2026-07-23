@@ -5,7 +5,7 @@ description: Torch-RecHub data loading and preprocessing
 
 # Data Pipeline
 
-Torch-RecHub offers datasets, generators, and utilities for recommendation data.
+Torch-RecHub provides common dataset classes, DataLoader generators, and preprocessing utilities. These components pass data that is **already encoded and padded** to models; category vocabularies, missing values, and split policy remain the user's responsibility.
 
 ## Datasets
 
@@ -14,8 +14,11 @@ Training/validation dataset with features and labels.
 
 ```python
 from torch_rechub.utils.data import TorchDataset
+# x may be a feature-to-array/Tensor mapping or a DataFrame
 dataset = TorchDataset(x, y)
 ```
+
+`x` must support `.items()`, and each column must support row indexing. A feature dictionary or `pandas.DataFrame` is typical.
 
 ### PredictDataset
 Prediction-only dataset (features only).
@@ -35,11 +38,25 @@ from torch_rechub.utils.data import DataGenerator
 
 dg = DataGenerator(x, y)
 train_dl, val_dl, test_dl = dg.generate_dataloader(
-    split_ratio=[0.7, 0.1],
+    split_ratio=[0.7, 0.1],  # 70% train, 10% validation, remaining 20% test
     batch_size=256,
     num_workers=8,
 )
 ```
+
+`split_ratio` contains the train and validation fractions; the test set uses the remainder. If the data is already split, omit `split_ratio` and pass each split explicitly:
+
+```python
+train_dl, val_dl, test_dl = dg.generate_dataloader(
+    x_val=x_val,
+    y_val=y_val,
+    x_test=x_test,
+    y_test=y_test,
+    batch_size=256,
+)
+```
+
+> The automatic path uses `torch.utils.data.random_split`. Call `torch.manual_seed(...)` before creating the DataLoaders when a reproducible split is required.
 
 ### MatchDataGenerator
 Build dataloaders for matching/retrieval models.
@@ -63,15 +80,42 @@ Compute embedding dim from vocab size: ``int(floor(6 * num_classes**0.25))``.
 
 ```python
 from torch_rechub.utils.data import get_auto_embedding_dim
-embed_dim = get_auto_embedding_dim(vocab_size=1000)
+embed_dim = get_auto_embedding_dim(num_classes=1000)
 ```
 
 ### get_loss_func
-Return default loss by task type: BCELoss for classification, MSELoss for regression.
+Return the default loss by task type. Classification returns `torch.nn.BCELoss`, so its input must be a probability in `[0, 1]`, not an unprocessed logit. Regression returns `torch.nn.MSELoss`.
 
 ```python
 from torch_rechub.utils.data import get_loss_func
 loss_fn = get_loss_func(task_type="classification")
+```
+
+## Sequence Data
+
+`SequenceDataGenerator` is used by next-item tasks such as HSTU and HLLM. It accepts four NumPy arrays with the same first dimension. Each batch is `(seq_tokens, seq_positions, seq_time_diffs, targets)`.
+
+```python
+from torch_rechub.utils.data import SequenceDataGenerator
+
+generator = SequenceDataGenerator(
+    seq_tokens,
+    seq_positions,
+    targets,
+    seq_time_diffs,
+)
+
+# Already split data: the return value is a one-element tuple
+train_dl = generator.generate_dataloader(
+    batch_size=32,
+    num_workers=0,
+)[0]
+
+# Automatic splitting requires three ratios that sum to 1
+train_dl, val_dl, test_dl = generator.generate_dataloader(
+    batch_size=32,
+    split_ratio=(0.7, 0.1, 0.2),
+)
 ```
 
 ## Parquet Streaming Dataset
@@ -82,10 +126,10 @@ Torch-RecHub provides `ParquetIterableDataset` for streaming Parquet files gener
 
 ### Installation
 
-Parquet data loading requires `pyarrow`:
+Parquet data loading requires the `bigdata` extra:
 
 ```bash
-pip install pyarrow
+python -m pip install "torch-rechub[bigdata]"
 ```
 
 ### ParquetIterableDataset
@@ -94,7 +138,7 @@ Inherits from `torch.utils.data.IterableDataset` with multi-worker support.
 
 ```python
 from torch.utils.data import DataLoader
-from torch_rechub.data import ParquetIterableDataset
+from torch_rechub.data.dataset import ParquetIterableDataset
 
 dataset = ParquetIterableDataset(
     ["/data/train1.parquet", "/data/train2.parquet"],
@@ -129,7 +173,8 @@ for batch in loader:
 
 # ========== PyTorch Side ==========
 import glob
-from torch_rechub.data import ParquetIterableDataset
+from torch.utils.data import DataLoader
+from torch_rechub.data.dataset import ParquetIterableDataset
 
 file_paths = glob.glob("/data/train.parquet/*.parquet")
 dataset = ParquetIterableDataset(file_paths, batch_size=2048)
@@ -147,6 +192,8 @@ loader = DataLoader(dataset, batch_size=None, num_workers=8)
 
 > **Note**: Nested arrays require equal row lengths; otherwise raises `ValueError`.
 
+> **Type limits**: The current converter does not support Arrow string columns. Encode category strings as numeric IDs before writing Parquet. Every supported scalar column, including integer IDs, becomes `torch.float32`; models cast embedding inputs back to integer indices. Because `float32` cannot represent every integer above `2^24` exactly, remap large business IDs to compact contiguous indices first.
+
 ## Typical Flow
 
 ![Data pipeline](/img/diagrams/data_pipeline.png)
@@ -156,6 +203,6 @@ loader = DataLoader(dataset, batch_size=None, num_workers=8)
 3. Encode categorical features (e.g., LabelEncoder).
 4. Process sequences (pad/truncate).
 5. Construct samples (e.g., negative sampling).
-6. Use DataGenerator / MatchDataGenerator to build dataloaders.
+6. Use DataGenerator, MatchDataGenerator, or SequenceDataGenerator to build dataloaders for the task.
 7. Train models with the trainers.
 

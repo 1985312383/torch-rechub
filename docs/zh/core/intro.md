@@ -46,6 +46,8 @@ Torch-RecHub 的核心组件架构如下：
 - **PredictDataset**：用于预测的数据集合
 - **DataGenerator**：用于生成排序模型和多任务模型的数据加载器
 - **MatchDataGenerator**：用于生成召回模型的数据加载器
+- **SequenceDataGenerator**：用于生成 HSTU/HLLM 序列任务的数据加载器
+- **ParquetIterableDataset**：用于按 batch 流式读取 Parquet 文件
 
 详情请参考 [数据流水线](/zh/core/data) 页面。
 
@@ -56,5 +58,8 @@ Torch-RecHub 的核心组件架构如下：
 - **CTRTrainer**：用于训练排序模型
 - **MatchTrainer**：用于训练召回模型
 - **MTLTrainer**：用于训练多任务模型
+- **SeqTrainer**：用于训练 HSTU/HLLM 序列生成模型
+
+RQ-VAE 和 TIGER 使用专用的数据处理与训练流程，请参考 [生成式模型](/zh/models/generative) 及对应的复现文档。
 
 详情请参考 [训练与评估](/zh/core/evaluation) 页面。

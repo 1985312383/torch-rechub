@@ -15,7 +15,9 @@ EarlyStopper 是一个早停器，用于在验证集性能不再提升时停止�
 
 - 监控验证集指标（如 AUC）
 - 当指标连续多轮没有提升时触发早停
-- 自动保存最佳模型权重
+- 在内存中深拷贝最佳模型权重
+
+`EarlyStopper` 固定按“越大越好”的 AUC 语义工作，不适合直接监控需要最小化的 loss。它本身不写磁盘；若训练在达到最大 epoch 前没有触发早停，Trainer 也不会自动恢复内存中的最佳权重。
 
 ### 使用方法
 
@@ -74,7 +76,11 @@ for epoch in range(n_epoch):
 Torch-RecHub 的训练器已经内置了早停功能，通过 `earlystop_patience` 参数控制：
 
 ```python
+from pathlib import Path
 from torch_rechub.trainers import CTRTrainer
+
+model_dir = Path("saved/model")
+model_dir.mkdir(parents=True, exist_ok=True)
 
 trainer = CTRTrainer(
     model=model,
@@ -82,7 +88,7 @@ trainer = CTRTrainer(
     n_epoch=50,
     earlystop_patience=10,  # 早停耐心值
     device="cuda:0",
-    model_path="saved/model"
+    model_path=str(model_dir)
 )
 
 trainer.fit(train_dataloader, val_dataloader)
@@ -116,13 +122,19 @@ trainer.fit(train_dl, val_dl)
 # 方式二：手动使用 EarlyStopper
 early_stopper = EarlyStopper(patience=10)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+criterion = torch.nn.BCELoss()
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+model.to(device)
 
 for epoch in range(50):
     model.train()
-    for batch in train_dl:
+    for x_dict, y in train_dl:
         # 训练步骤
+        x_dict = {name: value.to(device) for name, value in x_dict.items()}
+        y = y.float().to(device)
         optimizer.zero_grad()
-        loss = model(batch)
+        prediction = model(x_dict)
+        loss = criterion(prediction, y.view_as(prediction))
         loss.backward()
         optimizer.step()
 
@@ -150,6 +162,6 @@ for epoch in range(50):
    - 使用 `scheduler_fn` 和 `scheduler_params` 配置学习率调度器
 
 3. **保存检查点**：
-   - 早停器会自动保存最佳权重
-   - 建议同时使用 `model_path` 参数保存模型到磁盘
+   - 早停器只在内存中保留最佳权重；需要时显式 `load_state_dict`
+   - Trainer 会在 `fit()` 结束时向 `model_path` 写权重，但目录必须预先存在；若未触发早停，写出的是最后一轮权重
 

@@ -3,7 +3,7 @@ title: TIGER 复现说明
 description: TIGER 生成式推荐模型在 torch-rechub 中的运行说明，包括语义 ID 流水线、运行模式与 toy 训练流程
 ---
 
-## TIGER 在 torch-rechub 中的复现说明
+# TIGER 在 torch-rechub 中的复现说明
 
 本文件说明当前 `torch-rechub` 中 TIGER（Transformer Index for GEnerative Recommenders）的实现与运行方式。TIGER 把"预测下一个 item"建模成"生成下一个 item 的语义 ID"的序列到序列任务：每个 item 先由 RQ-VAE 量化成一串 codebook token（语义 ID，如 `<a_1><b_3><c_5>`），再用 T5 自回归地生成下一个 item 的语义 ID，并通过前缀受限的 beam search 约束到合法 item 上。
 
@@ -40,7 +40,7 @@ TIGER 需要两个 JSON 文件：
 - `valid`：以 `items[:-2]` 为历史，`items[-2]` 为标签。
 - `test`：以 `items[:-1]` 为历史，`items[-1]` 为标签。
 
-因此每个用户至少需要 3 个交互才能产生训练样本。
+因此每个用户至少需要 4 个交互才能产生至少一个训练样本；3 个交互只能构造 valid/test 样本。
 
 ---
 
@@ -67,26 +67,43 @@ TIGER 需要两个 JSON 文件：
 
 ## 4. Toy 快速跑通
 
-无需任何外部数据，CPU 即可端到端验证：
+先安装生成式模型 extra：
+
+```bash
+pip install -e ".[generative]"
+pip install sentencepiece
+```
+
+当前 `generative` extra 尚未声明 `sentencepiece`，而 `T5Tokenizer` 需要它，因此 TIGER 需单独安装。
+
+Toy 模式不需要外部推荐数据集，但仍需从 `--base_model` 加载 T5 的 tokenizer 与 config。以下命令显式使用独立 toy 路径，CPU 也可做小规模端到端验证：
 
 ```bash
 cd examples/generative
 
 # MovieLens 形态的合成数据
 python run_tiger_movielens.py --mode all \
+    --data_inter_path ./tmp/tiger-toy/ml/inter.json \
+    --data_indice_path ./tmp/tiger-toy/ml/semantic_ids.json \
+    --output_dir ./tmp/tiger-toy/ml/ckpt \
     --toy_num_users 16 --toy_num_items 20 \
     --epochs 2 --per_device_batch_size 4 \
     --num_beams 4 --test_batch_size 2 --num_workers 0
 
 # Amazon-Books 的内置 toy 数据
 python run_tiger_amazon_books.py --mode all \
+    --data_inter_path ./tmp/tiger-toy/amazon/inter.json \
+    --data_indice_path ./tmp/tiger-toy/amazon/semantic_ids.json \
+    --output_dir ./tmp/tiger-toy/amazon/ckpt \
     --epochs 5 --per_device_batch_size 4 \
     --num_beams 4 --test_batch_size 2 --num_workers 0
 ```
 
 正常会看到 `Added N semantic-id tokens` → `Model saved to ...` → `Test results: {...}` 的输出。
 
-> 离线/无法访问 HuggingFace Hub 时，`t5-small` 这个旧别名可能无法解析，请改用规范仓库名：`--base_model google-t5/t5-small`。
+> **数据覆盖风险**：`generate-toy-data` 和默认的 `all` 都会无条件重写 `--data_inter_path` 与 `--data_indice_path`。绝不要把 toy 命令指向真实数据；默认 mode 也是 `all`，真实训练必须显式写 `--mode train` 或 `--mode test`。
+
+> `t5-small` 与 `google-t5/t5-small` 都可能访问 HuggingFace Hub。离线运行必须把 tokenizer/config 预先缓存好，或将 `--base_model` 指向包含这些文件的本地目录；只改成规范仓库名不能解决离线问题。
 
 ---
 
@@ -99,13 +116,31 @@ python run_tiger_amazon_books.py --mode all \
    ```bash
    python run_tiger_movielens.py --mode prepare-data \
        --ratings_path ./data/ml-1m/ratings.dat \
+       --vocab_path ./data/ml-1m/processed/vocab.pkl \
        --data_inter_path ./data/ml-1m/tiger/inter.json \
        --min_seq_len 5 --max_his_len 20
    ```
 
-   这一步按时间戳排序、过滤交互过少的用户，把 movie id 重映射成连续的 1-based item id，并额外写出 `movie_id_map.json`。
+   这一步按时间戳排序、过滤交互过少的用户，并额外写出 `movie_id_map.json`。传入 `--vocab_path` 时会复用 HSTU/HLLM 的 token id；不传时才会独立重映射成连续的 1-based item id。
 
-2. **生成语义 ID**：为同一批 item id 准备 item embedding（例如 HLLM 预处理产出的文本/ID embedding），用 `run_rqvae_amazon_books.py` 风格的 RQ-VAE 训练并导出 `semantic_ids.json`。**RQ-VAE 输出必须按第 1 步相同的 item id 作为 key**，否则 `inter.json` 与 `semantic_ids.json` 对不上。
+2. **生成语义 ID**：为同一批 item id 准备 item embedding（例如 HLLM 预处理产出的文本 embedding），用 `run_rqvae_amazon_books.py` 风格的 RQ-VAE 训练并导出 `semantic_ids.json`。**RQ-VAE 输出必须按第 1 步相同的 item id 作为 key**，否则 `inter.json` 与 `semantic_ids.json` 对不上。
+
+   当前仓库只有 Amazon 命名的通用 RQ-VAE 示例，没有封装 MovieLens 的映射检查；而且该脚本生成语义 ID 时的 DataLoader 当前设置了 `shuffle=True`，输出字典又按枚举位置编号。真实数据复现前应先确保导出阶段 `shuffle=False`，并确认 embedding 第 `i` 行就是 token id `i`。仅检查 key 数量无法发现“key 存在但对应错 item”的静默错位。
+
+   至少应在训练前检查覆盖范围：
+
+   ```python
+   import json
+
+   with open("./data/ml-1m/tiger/inter.json", encoding="utf-8") as f:
+       interactions = json.load(f)
+   with open("./data/ml-1m/tiger/semantic_ids.json", encoding="utf-8") as f:
+       semantic_ids = json.load(f)
+
+   referenced = {str(item) for seq in interactions.values() for item in seq}
+   missing = sorted(referenced - set(semantic_ids))
+   assert not missing, f"semantic_ids 缺少 {len(missing)} 个 item，例如 {missing[:10]}"
+   ```
 
 3. **训练与测试**：
 
@@ -135,7 +170,8 @@ Amazon-Books 的真实数据流程相同：先用 `run_rqvae_amazon_books.py` �
 
 ## 7. 常见问题
 
-- **`OSError: We couldn't connect to 'https://huggingface.co'`**：离线环境用 `--base_model google-t5/t5-small`（规范仓库名），并确保本地已缓存对应权重。
+- **`OSError: We couldn't connect to 'https://huggingface.co'`**：先联网缓存 tokenizer/config，或将 `--base_model` 指向对应本地目录；规范仓库名本身不保证离线可用。
+- **`KeyError` 出现在 `TigerSeqDataset._remap_items()`**：`inter.json` 引用的 item 没有语义 ID。运行上面的覆盖检查，并同时核实 RQ-VAE 行号与 item id 的对齐关系。
 - **`Trainer.__init__() got an unexpected keyword argument 'tokenizer'`**：`transformers>=5` 把 `tokenizer` 参数改名为 `processing_class`，脚本已按签名自动适配，无需手动改。
 - **`'TIGERModel' object has no attribute 'model_parallel'`**：旧版 T5 的 model-parallel 守卫在 `transformers>=5` 不再初始化，`TIGERModel.__init__` 已补 `model_parallel=False` / `device_map=None`，多卡 DataParallel 也能跑。
 - **生成结果总是子词、命中率异常低**：确认训练时确实执行了 `add_tokens` + `resize_token_embeddings`（日志里有 `Added N semantic-id tokens`），且 `test` 是从训练保存的 `--output_dir` 加载词表。
