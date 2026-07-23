@@ -1,13 +1,23 @@
 ---
-title: Vector Index
-description: Torch-RecHub Vector Retrieval Tools
+title: Vector Retrieval Wrapper
+description: Torch-RecHub vector retrieval tools
 ---
 
-# Vector Index
+# Vector Retrieval Wrapper
 
-Torch-RecHub provides a unified vector retrieval interface supporting three mainstream Approximate Nearest Neighbor (ANN) search libraries: **Annoy**, **FAISS**, and **Milvus**. Through the standardized Builder-Indexer pattern, users can easily switch between different retrieval backends.
+Torch-RecHub provides a unified vector retrieval interface that supports three mainstream Approximate Nearest Neighbor (ANN) search libraries: **Annoy**, **FAISS**, and **Milvus**. The standardized Builder-Indexer pattern makes it easy to switch between retrieval backends.
 
-![Vector index Builder-Indexer component relationship](/img/diagrams/vector_index_builder_indexer.png)
+![Vector index Builder-Indexer component diagram](/img/diagrams/vector_index_builder_indexer.png)
+
+## Installation
+
+The current `torch_rechub.serving` package loads all three backends when imported. Even if you use only one backend, you need to install all retrieval extras:
+
+```bash
+pip install "torch-rechub[annoy,faiss,milvus]"
+```
+
+This is a limitation of the current package import behavior; it does not mean that all three backends must be used at runtime.
 
 ## Quick Start
 
@@ -15,30 +25,32 @@ Torch-RecHub provides a unified vector retrieval interface supporting three main
 import torch
 from torch_rechub.serving import builder_factory
 
-# Prepare embeddings
-item_embeddings = torch.randn(1000, 64, dtype=torch.float32)  # 1000 items, 64 dimensions
+# Prepare embedding vectors
+item_embeddings = torch.randn(1000, 64, dtype=torch.float32)  # 1,000 items, 64 dimensions
 user_embeddings = torch.randn(10, 64, dtype=torch.float32)    # 10 users, 64 dimensions
 
-# Create Builder and build index
+# Create a Builder and build the index
 builder = builder_factory("faiss", index_type="Flat", metric="L2")
 
 with builder.from_embeddings(item_embeddings) as indexer:
     # Query Top-K
-    ids, distances = indexer.query(user_embeddings, top_k=10)
-    # Save index
+    ids, scores = indexer.query(user_embeddings, top_k=10)
+    # Save the index
     indexer.save("item.index")
 
-# Load existing index
+# Load an existing index
 with builder.from_index_file("item.index") as indexer:
-    ids, distances = indexer.query(user_embeddings, top_k=10)
+    ids, scores = indexer.query(user_embeddings, top_k=10)
 ```
+
+The meaning of the second return value depends on the metric: for L2/angular it is generally a distance where smaller is closer, while for IP/COSINE it is generally a score where larger is more similar. Do not compare this value directly across different metrics.
 
 ## Core Concepts
 
 ### Builder-Indexer Pattern
 
-- **Builder**: Responsible for index construction configuration, created via the `builder_factory` factory function
-- **Indexer**: Responsible for query and save operations, obtained through the Builder's context manager
+- **Builder**: Manages index construction configuration and is created through the `builder_factory` factory function
+- **Indexer**: Performs query and save operations and is obtained through the Builder's context manager
 
 ### Factory Function
 
@@ -51,30 +63,21 @@ builder = builder_factory(model, **builder_config)
 | Parameter          | Type   | Description                                                 |
 | ------------------ | ------ | ----------------------------------------------------------- |
 | `model`            | `str`  | Retrieval backend name: `"annoy"`, `"faiss"`, or `"milvus"` |
-| `**builder_config` | `dict` | Configuration parameters passed to the specific Builder     |
+| `**builder_config` | `dict` | Configuration arguments passed to the specific Builder      |
 
 ---
 
 ## Annoy
 
-[Annoy](https://github.com/spotify/annoy) (Approximate Nearest Neighbors Oh Yeah) is an open-source approximate nearest neighbor search library by Spotify, featuring memory efficiency and file memory mapping support.
+[Annoy](https://github.com/spotify/annoy) (Approximate Nearest Neighbors Oh Yeah) is an open-source approximate nearest neighbor search library from Spotify. It is memory efficient and supports memory-mapped index files.
 
-### Installation
+### Backend Dependencies
 
 ```bash
-pip install annoy
+pip install "torch-rechub[annoy,faiss,milvus]"
 ```
 
-> ⚠️ **Note**: Annoy is a C++ library that requires compilation during installation. If your system lacks a C++ compilation environment (e.g., missing Visual Studio Build Tools on Windows), you may encounter compilation errors.
->
-> **Solutions**:
-> - **Linux/macOS**: Ensure `gcc`/`g++` or `clang` is installed
-> - **Windows**: Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/), or download pre-built wheel files:
->   - Pre-built wheels: [https://github.com/Sprocketer/annoy-wheels](https://github.com/Sprocketer/annoy-wheels)
->   - Download the `.whl` file matching your Python version, then install locally:
->     ```bash
->     pip install annoy-1.17.3-cp311-cp311-win_amd64.whl
->     ```
+> ⚠️ **Note**: Annoy includes a C++ extension. If PyPI has no wheel for your Python version and platform, installation falls back to local compilation: Linux/macOS requires a working `gcc`/`g++` or `clang`, while Windows requires [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). Do not install binary wheels from unknown third-party sources.
 
 ### Parameters
 
@@ -84,18 +87,18 @@ builder = builder_factory(
     d=64,                    # Vector dimension (required)
     metric="angular",        # Distance metric
     n_trees=10,              # Number of trees
-    threads=-1,              # Number of threads for building
-    searchk=-1,              # Number of nodes to inspect during search
+    threads=-1,              # Number of build threads
+    searchk=-1,              # Number of nodes inspected during search
 )
 ```
 
 | Parameter | Type  | Default     | Description                                                                 |
 | --------- | ----- | ----------- | --------------------------------------------------------------------------- |
 | `d`       | `int` | Required    | Vector dimension                                                            |
-| `metric`  | `str` | `"angular"` | Distance metric: `"angular"` (cosine), `"euclidean"`, `"dot"` (dot product) |
-| `n_trees` | `int` | `10`        | Number of trees to build; more trees = higher accuracy but slower build     |
+| `metric`  | `str` | `"angular"` | Distance metric: `"angular"` (cosine), `"euclidean"` (Euclidean), or `"dot"` (dot product) |
+| `n_trees` | `int` | `10`        | Number of trees to build; more trees improve accuracy but slow construction |
 | `threads` | `int` | `-1`        | Number of build threads; `-1` uses all available cores                      |
-| `searchk` | `int` | `-1`        | Nodes to inspect during search; `-1` means `n_trees * top_k`                |
+| `searchk` | `int` | `-1`        | Nodes inspected during search; `-1` means `n_trees * top_k`                 |
 
 ### Usage Example
 
@@ -106,7 +109,7 @@ from torch_rechub.serving import builder_factory
 item_embeddings = torch.randn(1000, 64, dtype=torch.float32)
 user_embeddings = torch.randn(10, 64, dtype=torch.float32)
 
-# Using cosine similarity
+# Use cosine similarity
 builder = builder_factory(
     "annoy",
     d=64,
@@ -127,25 +130,23 @@ print(f"Distances: {distances}")
 
 ## FAISS
 
-[FAISS](https://github.com/facebookresearch/faiss) (Facebook AI Similarity Search) is Meta's open-source high-performance similarity search library, supporting GPU acceleration and multiple index types.
+[FAISS](https://github.com/facebookresearch/faiss) (Facebook AI Similarity Search) is Meta's open-source high-performance similarity search library with support for multiple index types. The current Torch-RecHub wrapper creates CPU indexes and does not perform CPU-to-GPU index conversion.
 
-### Installation
+### Backend Dependencies
 
 ```bash
-# CPU version
-pip install faiss-cpu
-
-# GPU version (requires CUDA)
-pip install faiss-gpu
+pip install "torch-rechub[annoy,faiss,milvus]"
 ```
+
+The `faiss-gpu` package itself provides GPU capabilities, but the current `FaissBuilder` does not move indexes to the GPU. This page's API therefore still uses the CPU path.
 
 ### Supported Index Types
 
-| Index Type | Description                       | Use Case                  |
-| ---------- | --------------------------------- | ------------------------- |
-| `Flat`     | Brute-force search, exact results | Small-scale data (< 100K) |
-| `HNSW`     | Graph-based approximate search    | Medium-scale, high recall |
-| `IVF`      | Inverted index, cluster-based     | Large-scale data          |
+| Index Type | Description                       | Use Case                    |
+| ---------- | --------------------------------- | --------------------------- |
+| `Flat`     | Brute-force search, exact results | Small-scale data (< 100K)   |
+| `HNSW`     | Graph-based approximate search    | Medium-scale, high recall   |
+| `IVF`      | Inverted index, clustered search  | Large-scale data            |
 
 ### Parameters
 
@@ -162,7 +163,7 @@ builder = builder_factory(
 | Parameter    | Type  | Default  | Description                                                 |
 | ------------ | ----- | -------- | ----------------------------------------------------------- |
 | `index_type` | `str` | `"Flat"` | Index type                                                  |
-| `metric`     | `str` | `"L2"`   | Distance metric: `"L2"` (Euclidean), `"IP"` (Inner Product) |
+| `metric`     | `str` | `"L2"`   | Distance metric: `"L2"` (Euclidean) or `"IP"` (inner product) |
 
 #### HNSW Index
 
@@ -171,15 +172,15 @@ builder = builder_factory(
     "faiss",
     index_type="HNSW",
     metric="L2",
-    m=32,                    # Maximum neighbors per node
-    efSearch=50,             # Candidate nodes during search
+    m=32,                    # Maximum number of neighbors per node
+    efSearch=50,             # Number of candidate nodes during search
 )
 ```
 
 | Parameter  | Type  | Default | Description                                                      |
 | ---------- | ----- | ------- | ---------------------------------------------------------------- |
-| `m`        | `int` | `32`    | Maximum neighbors per node; higher = more accurate               |
-| `efSearch` | `int` | `None`  | Candidate nodes during search; higher = more accurate but slower |
+| `m`        | `int` | `32`    | Maximum neighbors per node; larger values improve accuracy       |
+| `efSearch` | `int` | `None`  | Candidate nodes during search; larger values are more accurate but slower |
 
 #### IVF Index
 
@@ -189,14 +190,14 @@ builder = builder_factory(
     index_type="IVF",
     metric="L2",
     nlists=100,              # Number of cluster centers
-    nprobe=10,               # Clusters to visit during search
+    nprobe=10,               # Number of clusters visited during search
 )
 ```
 
 | Parameter | Type  | Default | Description                                                        |
 | --------- | ----- | ------- | ------------------------------------------------------------------ |
-| `nlists`  | `int` | `100`   | Number of cluster centers; recommended `sqrt(n)` to `4*sqrt(n)`    |
-| `nprobe`  | `int` | `None`  | Clusters to visit during search; higher = more accurate but slower |
+| `nlists`  | `int` | `100`   | Number of cluster centers; `sqrt(n)` to `4*sqrt(n)` is recommended |
+| `nprobe`  | `int` | `None`  | Clusters visited during search; larger values are more accurate but slower |
 
 ### Usage Example
 
@@ -207,7 +208,7 @@ from torch_rechub.serving import builder_factory
 item_embeddings = torch.randn(10000, 128, dtype=torch.float32)
 user_embeddings = torch.randn(100, 128, dtype=torch.float32)
 
-# Using HNSW index
+# Use an HNSW index
 builder = builder_factory(
     "faiss",
     index_type="HNSW",
@@ -225,18 +226,15 @@ with builder.from_embeddings(item_embeddings) as indexer:
 
 ## Milvus
 
-[Milvus](https://milvus.io/) is a cloud-native vector database supporting distributed deployment and multiple indexing algorithms, suitable for production-grade large-scale vector retrieval.
+[Milvus](https://milvus.io/) is a cloud-native vector database that supports distributed deployment and multiple indexing algorithms, making it suitable for large-scale vector retrieval in production environments.
 
-### Installation
+### Backend Dependencies and Service
 
 ```bash
-pip install pymilvus
+pip install "torch-rechub[annoy,faiss,milvus]"
 ```
 
-> **Note**: Using Milvus requires starting the Milvus service first. You can quickly start it with Docker:
-> ```bash
-> docker run -d --name milvus-standalone -p 19530:19530 milvusdb/milvus:latest
-> ```
+> **Note**: You must also start a Milvus service before using this backend. Milvus Standalone includes additional components and cannot be started by simply running an image without its startup command. Follow the [official Milvus Docker installation guide](https://milvus.io/docs/install_standalone-docker.md) to start and check the service.
 
 ### Supported Index Types
 
@@ -255,14 +253,14 @@ builder = builder_factory(
     "milvus",
     d=64,                    # Vector dimension (required)
     index_type="FLAT",
-    metric="L2",             # Distance metric
+    metric="COSINE",         # Default distance metric
 )
 ```
 
-| Parameter | Type  | Default  | Description                                 |
-| --------- | ----- | -------- | ------------------------------------------- |
-| `d`       | `int` | Required | Vector dimension                            |
-| `metric`  | `str` | `"L2"`   | Distance metric: `"L2"`, `"IP"`, `"COSINE"` |
+| Parameter | Type  | Default    | Description                                 |
+| --------- | ----- | ---------- | ------------------------------------------- |
+| `d`       | `int` | Required   | Vector dimension                            |
+| `metric`  | `str` | `"COSINE"` | Distance metric: `"L2"`, `"IP"`, or `"COSINE"` |
 
 #### HNSW Index
 
@@ -272,15 +270,15 @@ builder = builder_factory(
     d=64,
     index_type="HNSW",
     metric="COSINE",
-    m=16,                    # Maximum neighbors per node
-    ef=50,                   # Candidate nodes during search
+    m=30,                    # Maximum number of neighbors per node
+    ef=50,                   # Number of candidate nodes during search
 )
 ```
 
-| Parameter | Type  | Default | Description                   |
-| --------- | ----- | ------- | ----------------------------- |
-| `m`       | `int` | `16`    | Maximum neighbors per node    |
-| `ef`      | `int` | `None`  | Candidate nodes during search |
+| Parameter | Type  | Default | Description                             |
+| --------- | ----- | ------- | --------------------------------------- |
+| `m`       | `int` | `30`    | Maximum number of neighbors per node    |
+| `ef`      | `int` | `None`  | Number of candidate nodes during search |
 
 #### IVF_FLAT Index
 
@@ -291,14 +289,14 @@ builder = builder_factory(
     index_type="IVF_FLAT",
     metric="IP",
     nlist=128,               # Number of cluster centers
-    nprobe=16,               # Clusters to visit during search
+    nprobe=16,               # Number of clusters visited during search
 )
 ```
 
-| Parameter | Type  | Default | Description                     |
-| --------- | ----- | ------- | ------------------------------- |
-| `nlist`   | `int` | `128`   | Number of cluster centers       |
-| `nprobe`  | `int` | `None`  | Clusters to visit during search |
+| Parameter | Type  | Default | Description                              |
+| --------- | ----- | ------- | ---------------------------------------- |
+| `nlist`   | `int` | `128`   | Number of cluster centers                |
+| `nprobe`  | `int` | `None`  | Number of clusters visited during search |
 
 ### Usage Example
 
@@ -309,7 +307,7 @@ from torch_rechub.serving import builder_factory
 item_embeddings = torch.randn(10000, 64, dtype=torch.float32)
 user_embeddings = torch.randn(100, 64, dtype=torch.float32)
 
-# Using Milvus HNSW index
+# Use a Milvus HNSW index
 builder = builder_factory(
     "milvus",
     d=64,
@@ -321,14 +319,16 @@ builder = builder_factory(
 
 with builder.from_embeddings(item_embeddings) as indexer:
     ids, distances = indexer.query(user_embeddings, top_k=10)
-    # Note: Milvus indexes are stored on the server, local save is not supported
+    # The current wrapper does not support local save
 ```
+
+`MilvusBuilder.from_embeddings()` creates a randomly named temporary collection and calls `drop()` when the `with` block exits; `save()` and `from_index_file()` are also unimplemented. This wrapper is therefore suitable for one-off experiments, not for managing persistent online collections. For long-running services, create and maintain collections directly with the Milvus client.
 
 ---
 
 ## Complete Example: Retrieval Model Evaluation
 
-Here's a complete example of dual-tower model vector retrieval evaluation:
+The following is a vector retrieval evaluation example for a single-interest two-tower model, where both user and item embeddings are two-dimensional tensors. Multi-interest models such as MIND and ComiRec, which output `[batch, interests, dim]`, require the interests to be flattened and deduplication and merge strategies to be defined; they cannot use this function directly.
 
 ```python
 import collections
@@ -351,45 +351,48 @@ def match_evaluation(
     **backend_kwargs,
 ):
     """
-    Perform retrieval evaluation using vector search
+    Evaluate retrieval using vector search
     
     Args:
         user_embedding: User embedding vectors (n_users, dim)
         item_embedding: Item embedding vectors (n_items, dim)
         test_user: Test user data dictionary
-        all_item: All item data dictionary
+        all_item: Complete item data dictionary
         user_col: User ID column name
         item_col: Item ID column name
-        raw_id_maps: ID mapping file path
+        raw_id_maps: Path to the ID mapping file
         topk: Number of items to retrieve
         backend: Retrieval backend ("annoy", "faiss", "milvus")
-        **backend_kwargs: Additional parameters for builder_factory
+        **backend_kwargs: Additional arguments passed to builder_factory
     
     Returns:
         Evaluation metrics dictionary
     """
-    print(f"Performing vector retrieval evaluation using {backend}")
+    print(f"Evaluating vector retrieval with {backend}")
     
-    # 1. Create Builder
+    # 1. Create a Builder
     dim = item_embedding.shape[1]
     
     if backend == "annoy":
-        builder = builder_factory("annoy", d=dim, n_trees=10, **backend_kwargs)
+        config = {"d": dim, "n_trees": 10}
     elif backend == "faiss":
-        builder = builder_factory("faiss", index_type="Flat", metric="L2", **backend_kwargs)
+        config = {"index_type": "Flat", "metric": "L2"}
     elif backend == "milvus":
-        builder = builder_factory("milvus", d=dim, index_type="FLAT", metric="L2", **backend_kwargs)
+        config = {"d": dim, "index_type": "FLAT", "metric": "L2"}
     else:
         raise ValueError(f"Unsupported backend: {backend}")
+    # Caller arguments override defaults, avoiding duplicate keywords such as index_type
+    config.update(backend_kwargs)
+    builder = builder_factory(backend, **config)
     
-    # 2. Ensure tensors are on CPU
+    # 2. Ensure tensors are on the CPU
     item_embedding = item_embedding.cpu().float()
     user_embedding = user_embedding.cpu().float()
     
     # 3. Load ID mappings
     user_map, item_map = np.load(raw_id_maps, allow_pickle=True)
     
-    # 4. Build index and query
+    # 4. Build the index and query it
     match_res = collections.defaultdict(dict)
     
     with builder.from_embeddings(item_embedding) as indexer:
@@ -401,7 +404,7 @@ def match_evaluation(
             predicted_item_ids = all_item[item_col][items_idx]
             match_res[user_map[user_id]] = np.vectorize(item_map.get)(predicted_item_ids)
     
-    # 5. Build ground truth
+    # 5. Build the ground truth
     data = pd.DataFrame({user_col: test_user[user_col], item_col: test_user[item_col]})
     data[user_col] = data[user_col].map(user_map)
     data[item_col] = data[item_col].map(item_map)
@@ -422,23 +425,23 @@ def match_evaluation(
 
 ---
 
-## Performance Comparison & Selection Guide
+## Performance Comparison and Selection Guide
 
-| Feature          | Annoy               | FAISS              | Milvus                  |
-| ---------------- | ------------------- | ------------------ | ----------------------- |
-| **Installation** | Easy                | Medium             | Requires service        |
-| **Memory Usage** | Low                 | Medium             | Depends on config       |
-| **Build Speed**  | Slow                | Fast               | Fast                    |
-| **Query Speed**  | Medium              | Fast               | Fast                    |
-| **GPU Support**  | ❌                   | ✅                  | ✅                       |
-| **Distributed**  | ❌                   | ❌                  | ✅                       |
-| **Best For**     | Small-scale offline | Medium-large scale | Production environments |
+| Feature | Annoy | FAISS | Milvus |
+| ------- | ----- | ----- | ------ |
+| **Installation Difficulty** | Easy | Moderate | Requires a service |
+| **Memory Usage** | Low | Moderate | Depends on service configuration |
+| **Build Speed** | Slow | Fast | Fast |
+| **Query Speed** | Moderate | Fast | Fast |
+| **Current Wrapper GPU Path** | ❌ | ❌ | Determined by the Milvus service |
+| **Distributed** | ❌ | ❌ | ✅ |
+| **Current Wrapper Use Case** | Small-scale offline | Medium-to-large-scale offline | Temporary experiments |
 
 ### Selection Recommendations
 
-- **Quick prototyping / Small datasets**: Use **Annoy** - simple installation, memory efficient
-- **Medium-large scale offline computation**: Use **FAISS** - excellent performance, GPU support
-- **Production environments / Online services**: Use **Milvus** - distributed support, dynamic updates
+- **Quick prototyping / Small datasets**: Use **Annoy** for simple installation and efficient memory use
+- **Medium-to-large-scale offline computation**: Use **FAISS**; the current wrapper uses the CPU path
+- **Persistent online services**: The Milvus service itself supports distributed operation and dynamic updates, but manage collections directly with the Milvus client instead of using the current context wrapper, which automatically deletes its collection
 
 ---
 
@@ -449,10 +452,10 @@ def match_evaluation(
 ```python
 class BaseBuilder(abc.ABC):
     def from_embeddings(self, embeddings: torch.Tensor) -> ContextManager[BaseIndexer]:
-        """Build index from embedding vectors"""
+        """Build an index from embedding vectors"""
         
     def from_index_file(self, index_file: FilePath) -> ContextManager[BaseIndexer]:
-        """Load index from file"""
+        """Load an index from a file"""
 ```
 
 ### BaseIndexer
@@ -468,10 +471,12 @@ class BaseIndexer(abc.ABC):
             top_k: Number of nearest neighbors to return
             
         Returns:
-            ids: Nearest neighbor IDs (n, top_k)
+            ids: Nearest-neighbor IDs (n, top_k)
             distances: Distances (n, top_k)
         """
         
     def save(self, file_path: FilePath) -> None:
-        """Save index to file"""
+        """Save the index to a file"""
 ```
+
+These are abstract interfaces; not every backend implements the persistence methods. The current Milvus backend raises `NotImplementedError` from `from_index_file()` and `save()`.

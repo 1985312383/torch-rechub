@@ -5,7 +5,7 @@ description: Torch-RecHub 在线服务部署示例
 
 # 在线服务示例
 
-本文档提供 Torch-RecHub 模型在线服务部署的完整示例。
+本文档演示 Torch-RecHub 部署组件的基本串联方式。示例不包含 API 网关、并发控制、监控或持久化服务编排。
 
 ## 排序模型部署
 
@@ -29,8 +29,8 @@ session = ort.InferenceSession("deepfm.onnx")
 
 # 准备输入
 inputs = {
-    "city": np.array([[1, 2, 3]], dtype=np.int64),
-    "age": np.array([[0.5, 0.3, 0.8]], dtype=np.float32),
+    "city": np.array([1, 2, 3], dtype=np.int64),
+    "age": np.array([0.5, 0.3, 0.8], dtype=np.float32),
 }
 
 # 推理
@@ -71,6 +71,8 @@ item_embeddings = np.concatenate(item_embeddings)
 
 ### 3. 在线召回服务（Milvus）
 
+统一工厂当前会同时导入三个后端，因此需要先安装 `pip install "torch-rechub[annoy,faiss,milvus]"`，并启动可连接的 Milvus 服务。
+
 ```python
 import torch
 import numpy as np
@@ -92,15 +94,17 @@ builder = builder_factory(
 )
 
 # 将物品 embedding 写入 Milvus
-with builder.from_embeddings(torch.tensor(item_embeddings)) as indexer:
+with builder.from_embeddings(torch.tensor(item_embeddings, dtype=torch.float32)) as indexer:
     # 计算用户 embedding
-    user_inputs = {"user_id": np.array([[123]])}
+    user_inputs = {"user_id": np.array([123], dtype=np.int64)}
     user_emb = user_session.run(None, user_inputs)[0]
 
     # 向量检索
-    ids, scores = indexer.query(torch.tensor(user_emb), top_k=100)
+    ids, scores = indexer.query(torch.tensor(user_emb, dtype=torch.float32), top_k=100)
     recall_items = ids[0].tolist()
 ```
+
+> 这里的 `MilvusBuilder.from_embeddings()` 只适合演示：它会创建临时 collection，并在退出 `with` 时删除。当前封装也不支持通过 `save()` 或 `from_index_file()` 管理持久化 Milvus collection；生产服务应直接使用 Milvus 客户端管理长期 collection。
 
 ## 最佳实践
 

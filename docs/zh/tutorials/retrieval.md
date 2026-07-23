@@ -176,6 +176,29 @@ trainer = MatchTrainer(
 trainer.fit(train_dl)
 ```
 
+### 3. 批内负采样（可选）
+
+对具有 `user_tower()` / `item_tower()` 且两塔输出都是二维张量的模型（如 DSSM），`MatchTrainer` 可以直接把同一 batch 的其他物品当作负样本：
+
+```python
+os.makedirs("./saved/dssm_inbatch", exist_ok=True)
+
+trainer = MatchTrainer(
+    model,
+    mode=0,
+    in_batch_neg=True,
+    in_batch_neg_ratio=3,
+    hard_negative=False,  # True 时选当前 batch 中得分最高的负样本
+    sampler_seed=2022,
+    optimizer_params={"lr": 1e-4},
+    n_epoch=2,
+    device="cpu",
+    model_path="./saved/dssm_inbatch",
+)
+```
+
+该模式先计算 `[B, B]` 的用户-物品分数矩阵：对角线 `(user_i, item_i)` 必须是原始配对的正样本，非对角位置才是可采样的负样本。因此 batch size 必须大于 1，且 `in_batch_neg_ratio <= batch_size - 1`；同一 batch 中存在其他真正样本时，它们仍可能成为 false negative。`sampler_seed` 用于复现随机采样。
+
 ### 3. 导出向量
 
 ```python
@@ -290,7 +313,7 @@ from torch_rechub.utils.match import Annoy
 
 annoy = Annoy(n_trees=10)
 annoy.fit(item_embedding)
-similar_items, scores = annoy.query(user_embedding[0], topk=10)
+similar_items, scores = annoy.query(user_embedding[0], n=10)
 print(similar_items)
 ```
 

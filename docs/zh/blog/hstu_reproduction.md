@@ -3,7 +3,7 @@ title: HSTU 模型复现说明
 description: Meta HSTU 模型在 torch-rechub 中的复现说明，包括架构设计和实现细节
 ---
 
-## HSTU 模型在 torch-rechub 中的复现说明
+# HSTU 模型在 torch-rechub 中的复现说明
 
 本文件说明当前 `torch-rechub` 中 HSTU（Hierarchical Sequential Transduction Units）的实现状态。核心层已经按论文 Eq. 2-4 和 Meta reference 的主要路径对齐：联合 UVQK 投影先做 SiLU、attention scores 加 `rab^{p,t}`、输出侧只保留 `f_2(Norm(AV) * U)`，层间残差放在 `HSTUBlock` 外部。
 
@@ -26,6 +26,36 @@ description: Meta HSTU 模型在 torch-rechub 中的复现说明，包括架构�
   - `torch_rechub/utils/data.py`：`SeqDataset`、`SequenceDataGenerator`。
   - `torch_rechub/trainers/seq_trainer.py`：`SeqTrainer`。
   - `examples/generative/run_hstu_movielens.py`、`examples/generative/run_hstu_amazon_books.py`：训练与 ranking 评估示例。
+
+### 最小复现命令
+
+以下命令均从仓库根目录执行。`processed/` 数据不是仓库内置样本，而是预处理脚本生成的目录：
+
+```bash
+pip install -e .
+
+# 缺少 MovieLens 原始文件时会自动下载；已有文件可加 --no_download
+python examples/generative/data/ml-1m/preprocess_ml_hstu.py
+
+# CPU 冒烟运行；正式实验通常改用 --device cuda 和更多 epoch
+mkdir -p outputs/hstu_ml
+python examples/generative/run_hstu_movielens.py \
+    --device cpu --epoch 1 --batch_size 16 \
+    --save_dir outputs/hstu_ml
+```
+
+Amazon Books 对应命令为：
+
+```bash
+python examples/generative/data/amazon-books/preprocess_amazon_books.py \
+    --data_source bytedance
+mkdir -p outputs/hstu_amazon
+python examples/generative/run_hstu_amazon_books.py \
+    --device cuda --epoch 3 --batch_size 64 \
+    --save_dir outputs/hstu_amazon
+```
+
+预处理器会重写输出目录中的 `vocab.pkl` 与三个 split 文件。要保留已有产物，请先备份或通过 `--output_dir` 写到新目录。训练 Amazon Books 时会生成 `[B, L, V]` 全词表 logits；脚本默认参数以约 24 GB GPU 为参考，显存不足时优先降低 `--batch_size` 和 `--max_seq_len`。
 
 ---
 
@@ -100,7 +130,7 @@ for layer in self.layers:
 
 时间差 bucket 化流程：
 
-```python
+```text
 dt = abs(time_diffs[i] - time_diffs[j]) / 60.0
 bucket = sqrt(dt) 或 log(dt)
 bucket = clamp(bucket / time_bucket_divisor, 0, num_time_buckets)

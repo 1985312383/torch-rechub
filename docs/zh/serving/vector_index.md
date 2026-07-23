@@ -9,6 +9,16 @@ Torch-RecHub 提供了统一的向量检索接口，支持三种主流的近似�
 
 ![向量索引 Builder-Indexer 组件关系图](/img/diagrams/vector_index_builder_indexer.png)
 
+## 安装
+
+当前 `torch_rechub.serving` 在导入时会同时加载三个后端。即使只调用其中一个，也需要安装全部检索 extra：
+
+```bash
+pip install "torch-rechub[annoy,faiss,milvus]"
+```
+
+这是当前包导入方式的限制，不代表运行时必须同时使用三个后端。
+
 ## 快速开始
 
 ```python
@@ -24,14 +34,16 @@ builder = builder_factory("faiss", index_type="Flat", metric="L2")
 
 with builder.from_embeddings(item_embeddings) as indexer:
     # 查询 Top-K
-    ids, distances = indexer.query(user_embeddings, top_k=10)
+    ids, scores = indexer.query(user_embeddings, top_k=10)
     # 保存索引
     indexer.save("item.index")
 
 # 加载已有索引
 with builder.from_index_file("item.index") as indexer:
-    ids, distances = indexer.query(user_embeddings, top_k=10)
+    ids, scores = indexer.query(user_embeddings, top_k=10)
 ```
+
+第二个返回值的语义由度量决定：L2/angular 通常是越小越近的距离，IP/COSINE 通常是越大越相似的分数。不要在不同度量之间直接比较该数值。
 
 ## 核心概念
 
@@ -59,22 +71,13 @@ builder = builder_factory(model, **builder_config)
 
 [Annoy](https://github.com/spotify/annoy)（Approximate Nearest Neighbors Oh Yeah）是 Spotify 开源的近似最近邻搜索库，特点是内存友好、支持文件内存映射。
 
-### 安装
+### 后端依赖
 
 ```bash
-pip install annoy
+pip install "torch-rechub[annoy,faiss,milvus]"
 ```
 
-> ⚠️ **注意**：Annoy 是 C++ 库，安装时需要编译。如果你的系统没有 C++ 编译环境（如 Windows 上缺少 Visual Studio Build Tools），可能会遇到编译错误。
->
-> **解决方案**：
-> - **Linux/macOS**：确保安装了 `gcc`/`g++` 或 `clang`
-> - **Windows**：安装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)，或直接下载预编译的 wheel 文件：
->   - 预编译 wheel 下载地址：[https://github.com/Sprocketer/annoy-wheels](https://github.com/Sprocketer/annoy-wheels)
->   - 根据你的 Python 版本下载对应的 `.whl` 文件，然后本地安装：
->     ```bash
->     pip install annoy-1.17.3-cp311-cp311-win_amd64.whl
->     ```
+> ⚠️ **注意**：Annoy 包含 C++ 扩展。如果 PyPI 没有适配当前 Python/平台的 wheel，安装时会转为本地编译：Linux/macOS 需要可用的 `gcc`/`g++` 或 `clang`，Windows 需要 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)。不要从来源不明的第三方站点安装二进制 wheel。
 
 ### 参数说明
 
@@ -127,17 +130,15 @@ print(f"距离: {distances}")
 
 ## FAISS
 
-[FAISS](https://github.com/facebookresearch/faiss)（Facebook AI Similarity Search）是 Meta 开源的高性能相似性搜索库，支持 GPU 加速和多种索引类型。
+[FAISS](https://github.com/facebookresearch/faiss)（Facebook AI Similarity Search）是 Meta 开源的高性能相似性搜索库，支持多种索引类型。Torch-RecHub 当前封装创建的是 CPU 索引，没有执行 CPU→GPU 索引转换。
 
-### 安装
+### 后端依赖
 
 ```bash
-# CPU 版本
-pip install faiss-cpu
-
-# GPU 版本（需要 CUDA）
-pip install faiss-gpu
+pip install "torch-rechub[annoy,faiss,milvus]"
 ```
+
+`faiss-gpu` 本身提供 GPU 能力，但当前 `FaissBuilder` 不会把索引转移到 GPU；通过本页 API 使用的仍是 CPU 路径。
 
 ### 支持的索引类型
 
@@ -227,16 +228,13 @@ with builder.from_embeddings(item_embeddings) as indexer:
 
 [Milvus](https://milvus.io/) 是一个云原生向量数据库，支持分布式部署和多种索引算法，适合生产环境的大规模向量检索。
 
-### 安装
+### 后端依赖与服务
 
 ```bash
-pip install pymilvus
+pip install "torch-rechub[annoy,faiss,milvus]"
 ```
 
-> **注意**：使用 Milvus 需要先启动 Milvus 服务。可以使用 Docker 快速启动：
-> ```bash
-> docker run -d --name milvus-standalone -p 19530:19530 milvusdb/milvus:latest
-> ```
+> **注意**：使用 Milvus 还需要先启动服务。Milvus Standalone 包含额外组件，不能只运行一个未带启动命令的镜像；请按 [Milvus 官方 Docker 安装文档](https://milvus.io/docs/install_standalone-docker.md) 启动与检查服务。
 
 ### 支持的索引类型
 
@@ -255,14 +253,14 @@ builder = builder_factory(
     "milvus",
     d=64,                    # 向量维度（必需）
     index_type="FLAT",
-    metric="L2",             # 距离度量
+    metric="COSINE",         # 默认距离度量
 )
 ```
 
 | 参数     | 类型  | 默认值 | 说明                                 |
 | -------- | ----- | ------ | ------------------------------------ |
 | `d`      | `int` | 必需   | 向量维度                             |
-| `metric` | `str` | `"L2"` | 距离度量：`"L2"`、`"IP"`、`"COSINE"` |
+| `metric` | `str` | `"COSINE"` | 距离度量：`"L2"`、`"IP"`、`"COSINE"` |
 
 #### HNSW 索引
 
@@ -272,14 +270,14 @@ builder = builder_factory(
     d=64,
     index_type="HNSW",
     metric="COSINE",
-    m=16,                    # 每个节点的最大邻居数
+    m=30,                    # 每个节点的最大邻居数
     ef=50,                   # 搜索时的候选节点数
 )
 ```
 
 | 参数 | 类型  | 默认值 | 说明                 |
 | ---- | ----- | ------ | -------------------- |
-| `m`  | `int` | `16`   | 每个节点的最大邻居数 |
+| `m`  | `int` | `30`   | 每个节点的最大邻居数 |
 | `ef` | `int` | `None` | 搜索时的候选节点数   |
 
 #### IVF_FLAT 索引
@@ -321,14 +319,16 @@ builder = builder_factory(
 
 with builder.from_embeddings(item_embeddings) as indexer:
     ids, distances = indexer.query(user_embeddings, top_k=10)
-    # 注意：Milvus 索引保存在服务端，不支持本地 save
+    # 当前封装不支持本地 save
 ```
+
+`MilvusBuilder.from_embeddings()` 会创建随机命名的临时 collection，并在退出 `with` 时执行 `drop()`；`save()` 和 `from_index_file()` 也未实现。因此这段封装适合一次性实验，不是持久化在线 collection 的管理接口。长期服务请直接用 Milvus 客户端创建和维护 collection。
 
 ---
 
 ## 完整示例：召回模型评估
 
-以下是一个完整的双塔模型向量化评估示例：
+以下是一个单兴趣（用户与物品 embedding 均为二维张量）的双塔模型向量化评估示例。MIND/ComiRec 等输出 `[batch, interests, dim]` 的多兴趣模型需要先展开兴趣并定义去重、合并策略，不能直接套用此函数。
 
 ```python
 import collections
@@ -374,13 +374,16 @@ def match_evaluation(
     dim = item_embedding.shape[1]
     
     if backend == "annoy":
-        builder = builder_factory("annoy", d=dim, n_trees=10, **backend_kwargs)
+        config = {"d": dim, "n_trees": 10}
     elif backend == "faiss":
-        builder = builder_factory("faiss", index_type="Flat", metric="L2", **backend_kwargs)
+        config = {"index_type": "Flat", "metric": "L2"}
     elif backend == "milvus":
-        builder = builder_factory("milvus", d=dim, index_type="FLAT", metric="L2", **backend_kwargs)
+        config = {"d": dim, "index_type": "FLAT", "metric": "L2"}
     else:
         raise ValueError(f"不支持的后端: {backend}")
+    # 调用方参数覆盖默认值，避免重复关键字（如 index_type）
+    config.update(backend_kwargs)
+    builder = builder_factory(backend, **config)
     
     # 2. 确保张量在 CPU 上
     item_embedding = item_embedding.cpu().float()
@@ -430,15 +433,15 @@ def match_evaluation(
 | **内存占用** | 低         | 中等     | 依赖服务配置 |
 | **构建速度** | 慢         | 快       | 快           |
 | **查询速度** | 中等       | 快       | 快           |
-| **GPU 支持** | ❌          | ✅        | ✅            |
+| **当前封装 GPU 路径** | ❌   | ❌        | 由 Milvus 服务决定 |
 | **分布式**   | ❌          | ❌        | ✅            |
-| **适用场景** | 小规模离线 | 中大规模 | 生产环境     |
+| **当前封装适用场景** | 小规模离线 | 中大规模离线 | 临时实验 |
 
 ### 选型建议
 
 - **快速原型/小数据集**：使用 **Annoy**，安装简单，内存友好
-- **中大规模离线计算**：使用 **FAISS**，性能优秀，支持 GPU
-- **生产环境/在线服务**：使用 **Milvus**，支持分布式和动态更新
+- **中大规模离线计算**：使用 **FAISS**；当前封装走 CPU 路径
+- **持久化在线服务**：Milvus 服务本身支持分布式和动态更新，但应直接使用 Milvus 客户端管理 collection，而不是当前会自动删除 collection 的上下文封装
 
 ---
 
@@ -475,3 +478,5 @@ class BaseIndexer(abc.ABC):
     def save(self, file_path: FilePath) -> None:
         """保存索引到文件"""
 ```
+
+以上是抽象接口；具体后端并非都实现持久化方法。当前 Milvus 后端的 `from_index_file()` 与 `save()` 会抛出 `NotImplementedError`。

@@ -23,23 +23,24 @@ description: Torch-RecHub 项目贡献指南，包括 Bug 报告、功能请求�
 git clone https://github.com/YOUR_USERNAME/torch-rechub.git
 cd torch-rechub
 
-# 2. 安装依赖并设置环境
-uv sync
+# 2. 创建环境并安装开发与全部可选依赖
+# uv sync 会以可编辑方式安装当前项目，无需再执行 pip install -e .
+uv sync --all-extras
 
-# 3. 以开发模式安装包
-uv pip install -e .
+# 3. 创建工作分支
+git switch -c docs/update-guide
 ```
 
 ### 开发工作流
 
 1. **Fork 仓库**：点击右上角的 "Fork" 按钮。
-2. **进行修改**：实现新功能或修复 Bug。
+2. **创建分支并进行修改**：实现新功能或修复 Bug。
 3. **格式化代码**：在提交前运行代码格式化以确保代码风格一致：
    ```bash
-   python config/format_code.py
+   uv run python config/format_code.py
    ```
 4. **提交更改**：`git commit -m "feat: add new feature"` 或 `git commit -m "fix: fix some issue"`（推荐遵循 [Conventional Commits](https://www.conventionalcommits.org/)）。
-5. **推送到分支**：`git push origin`
+5. **推送到分支**：`git push -u origin your-branch-name`
 6. **创建 Pull Request**：返回原始仓库页面，点击 "New pull request"，将您的分支与主仓库的 `main` 分支进行比较，然后提交 PR。
 
 ## 📋 代码规范
@@ -48,7 +49,7 @@ uv pip install -e .
 
 - `feature/feature-name` - 新功能
 - `fix/bug-description` - Bug 修复
-- `docs/documentation-update` - 文档更新
+- `docs/update-install-guide` - 文档更新（这里是 Git 分支名）
 - `test/test-description` - 测试添加
 
 ### 提交信息
@@ -65,7 +66,7 @@ uv pip install -e .
 
 1. **推送您的分支**
    ```bash
-   git push origin your-branch-name
+   git push -u origin your-branch-name
    ```
 
 2. **创建 Pull Request**
@@ -96,10 +97,18 @@ uv pip install -e .
 uv run pytest
 
 # 运行特定测试文件
-uv run pytest tests/test_models/test_ranking.py
+uv run pytest tests/test_e2e_ranking.py
 
 # 运行并生成覆盖率报告
 uv run pytest --cov=torch_rechub
+```
+
+Milvus 集成测试需要可连接的外部服务；没有该环境时可跳过：
+
+```powershell
+# PowerShell
+$env:SKIP_MILVUS_TESTS = "1"
+uv run pytest
 ```
 
 ## 📝 文档
@@ -117,7 +126,16 @@ uv run pytest --cov=torch_rechub
 - 包含代码示例
 - 提供清晰的分步说明
 - 保持英文和中文版本同步
-- 遵循 Google 风格的 Python 文档字符串
+- Python 文档字符串使用项目现有的 NumPy/SciPy 风格（`Parameters` / `Returns` 等分节）
+
+### 本地构建文档
+
+```bash
+npm ci
+npm run docs:build
+```
+
+提交文档修改时，请至少运行一次 `npm run docs:build`，并保持 `docs/zh` 和 `docs/en` 中对应页面同步。
 
 ## 🎯 贡献想法
 
@@ -164,7 +182,6 @@ uv run pytest --cov=torch_rechub
 
 - README 中的贡献者列表
 - 发布说明中的致谢
-- 项目文档中的贡献者页面
 - 重大贡献的特别提及
 
 ## 📜 行为准则

@@ -5,11 +5,11 @@ description: Torch-RecHub model deployment guide
 
 # Production Deployment Overview
 
-Torch-RecHub provides a complete production deployment solution, supporting deployment of trained models to production environments.
+Torch-RecHub provides deployment components such as ONNX export, quantization, and vector indexing. Production environments still require you to supply engineering capabilities such as feature services, API services, monitoring, canary releases, and disaster recovery.
 
 ## Deployment Process Overview
 
-![Production deployment pipeline](/img/diagrams/serving_pipeline.png)
+![End-to-end production deployment pipeline](/img/diagrams/serving_pipeline.png)
 
 ## Core Features
 
@@ -17,28 +17,30 @@ Torch-RecHub provides a complete production deployment solution, supporting depl
 | --- | --- | --- |
 | **ONNX Export** | Export PyTorch models to ONNX format | [ONNX Export & Quantization](/serving/onnx) |
 | **Model Quantization** | INT8/FP16 quantization to reduce inference latency | [ONNX Export & Quantization](/serving/onnx) |
-| **Vector Retrieval** | Annoy/FAISS/Milvus vector indexing | [Vector Retrieval](/serving/vector_index) |
-| **Online Service** | Deployment examples and best practices | [Online Service Demo](/serving/demo) |
+| **Vector Retrieval** | Annoy/FAISS/Milvus vector indexes | [Vector Retrieval Wrapper](/serving/vector_index) |
+| **Online Serving** | Deployment examples and best practices | [Online Serving Example](/serving/demo) |
 
 ## Quick Start
 
 ### 1. ONNX Export
 
 ```python
-from torch_rechub.trainers import CTRTrainer
+from torch_rechub.trainers import CTRTrainer, MatchTrainer
 
-# Export after training
-trainer.export_onnx("model.onnx")
+# Export the ranking model after training
+ctr_trainer = CTRTrainer(ctr_model)
+ctr_trainer.export_onnx("model.onnx")
 
-# Export two-tower models separately
-trainer.export_onnx("user_tower.onnx", mode="user")
-trainer.export_onnx("item_tower.onnx", mode="item")
+# Export the two towers separately
+match_trainer = MatchTrainer(match_model)
+match_trainer.export_onnx("user_tower.onnx", mode="user")
+match_trainer.export_onnx("item_tower.onnx", mode="item")
 ```
 
 ### 2. Model Quantization
 
 ```python
-from torch_rechub.utils import quantize_model
+from torch_rechub.utils.quantization import quantize_model
 
 # INT8 quantization (recommended for CPU)
 quantize_model("model_fp32.onnx", "model_int8.onnx", mode="int8")
@@ -49,14 +51,20 @@ quantize_model("model_fp32.onnx", "model_fp16.onnx", mode="fp16")
 
 ### 3. Vector Retrieval
 
+The current `torch_rechub.serving` package loads the Annoy, FAISS, and Milvus backends when imported. Install all retrieval extras before using the unified factory:
+
+```bash
+pip install "torch-rechub[annoy,faiss,milvus]"
+```
+
 ```python
 from torch_rechub.serving import builder_factory
 
-# Create FAISS index
+# Create a FAISS index
 builder = builder_factory("faiss", index_type="HNSW", metric="IP")
 
 with builder.from_embeddings(item_embeddings) as indexer:
-    ids, distances = indexer.query(user_embeddings, top_k=10)
+    ids, scores = indexer.query(user_embeddings, top_k=10)
     indexer.save("item.index")
 ```
 
@@ -65,19 +73,19 @@ with builder.from_embeddings(item_embeddings) as indexer:
 ### Ranking Model Deployment
 
 ```
-User Request → Feature Service → ONNX Runtime → Ranking Results
+User request → Feature service → ONNX Runtime → Ranking results
 ```
 
-### Matching Model Deployment
+### Retrieval Model Deployment
 
 ```
-User Request → User Tower Inference → Vector Retrieval → Retrieval Results
+User request → User tower inference → Vector retrieval → Retrieved results
                 ↓
-        Item Tower Offline Computation → Vector Index
+        Offline item tower computation → Vector index
 ```
 
 ## Next Steps
 
-- Learn about [ONNX Export & Quantization](/serving/onnx) in detail
-- Learn about [Vector Retrieval](/serving/vector_index) configuration
-- Check [Online Service Demo](/serving/demo) for complete deployment workflow
+- Learn how to use [ONNX Export & Quantization](/serving/onnx) in detail
+- Learn how to configure the [Vector Retrieval Wrapper](/serving/vector_index)
+- See the [Online Serving Example](/serving/demo) for the complete deployment workflow

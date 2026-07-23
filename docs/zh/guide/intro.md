@@ -17,7 +17,7 @@ description: Torch-RecHub 项目架构、特性和设计原理概览
 * **基于 PyTorch:** 利用 PyTorch 的动态图和硬件加速能力，支持 CPU、NVIDIA CUDA GPU、AMD ROCm GPU 和华为昇腾 NPU。
 * **丰富的模型库:** 包含多种经典和前沿的推荐算法。
 * **标准化流程:** 提供统一的数据加载、训练和评估流程。
-* **易于配置:** 通过配置文件或命令行参数轻松调整实验设置。
+* **易于配置:** 通过 Python 构造参数以及示例脚本的命令行参数调整实验设置。
 * **可复现性:** 旨在确保实验结果的可复现性。
 * **易扩展:** 模型训练与模型定义解耦，无basemodel概念。
 * **原生函数:** 尽可能使用pytorch原生的类与函数，不做过多定制。
@@ -64,21 +64,21 @@ Torch-RecHub 采用模块化设计，将推荐系统的核心功能划分为多�
 
 ## 支持的模型
 
-### 排序模型 (Ranking Models) - 13个
+### 排序模型 (Ranking Models) - 13 个导出类
 
-* DeepFM、Wide&Deep、DCN、DCN-v2、DIN、DIEN、BST、AFM、AutoInt、FiBiNET、DeepFFM、EDCN
+* DeepFM、WideDeep、DCN、DCNv2、DIN、DIEN、BST、AFM、AutoInt、FiBiNet、DeepFFM、FatDeepFFM、EDCN
 
-### 召回模型 (Matching Models) - 12个
+### 召回模型 (Matching Models) - 12 个导出类
 
-* DSSM、YoutubeDNN、YoutubeSBC、MIND、SINE、GRU4Rec、SASRec、NARM、STAMP、ComiRec、FacebookDSSM
+* DSSM、YoutubeDNN、YoutubeSBC、MIND、SINE、GRU4Rec、SASRec、NARM、STAMP、ComirecDR、ComirecSA、FaceBookDSSM
 
 ### 多任务模型 (Multi-Task Models) - 5个
 
 * ESMM、MMoE、PLE、AITM、SharedBottom
 
-### 生成式推荐 (Generative Recommendation) - 2个
+### 生成式推荐 (Generative Recommendation) - 4 个
 
-* HSTU、HLLM
+* HSTU、HLLM、RQ-VAE、TIGER
 
 ## 快速开始
 

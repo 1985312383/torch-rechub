@@ -84,13 +84,10 @@ from torch_rechub.models.multi_task import ESMM
 
 # Create model
 model = ESMM(
-    features=common_features,
-    task_types=["classification", "classification"],  # Both CTR and CVR are classification tasks
-    bottom_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
-    tower_params_list=[
-        {"dims": [64, 32], "dropout": 0.2, "activation": "relu"},  # CTR tower params
-        {"dims": [64, 32], "dropout": 0.2, "activation": "relu"}   # CVR tower params
-    ]
+    user_features=user_features,
+    item_features=item_features,
+    cvr_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
+    ctr_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
 )
 ```
 
@@ -98,10 +95,12 @@ model = ESMM(
 
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
-| features | list | Shared feature list for all tasks | None |
-| task_types | list | Task type list, supports "classification" | None |
-| bottom_params | dict | Shared bottom network parameters | None |
-| tower_params_list | list | Task-specific tower network parameters list | None |
+| user_features | list | User-side sparse features | required |
+| item_features | list | Item-side sparse features | required |
+| cvr_params | dict | CVR-tower MLP parameters | required |
+| ctr_params | dict | CTR-tower MLP parameters | required |
+
+`ESMM.forward()` always returns columns in `[cvr, ctr, ctcvr]` order. Labels passed to `MTLTrainer` must use the same `[B, 3]` order and `task_types` must contain three `"classification"` entries. For ESMM, the trainer directly optimizes only the CTR and CTCVR losses.
 
 ### Use Cases
 
@@ -247,13 +246,12 @@ from torch_rechub.models.multi_task import AITM
 # Create model
 model = AITM(
     features=common_features,
-    task_types=["classification", "classification"],
+    n_task=2,
     bottom_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
     tower_params_list=[
         {"dims": [64, 32], "dropout": 0.2, "activation": "relu"},  # Task 1 tower params
         {"dims": [64, 32], "dropout": 0.2, "activation": "relu"}   # Task 2 tower params
     ],
-    attention_params={"attention_dim": 64, "dropout": 0.2}  # Attention mechanism params
 )
 ```
 
@@ -262,10 +260,11 @@ model = AITM(
 | Parameter | Type | Description | Default |
 | --- | --- | --- | --- |
 | features | list | Shared feature list for all tasks | None |
-| task_types | list | Task type list, supports "classification" and "regression" | None |
-| bottom_params | dict | Shared bottom network parameters | None |
+| n_task | int | Number of ordered dependent binary-classification tasks | required |
+| bottom_params | dict | Bottom MLP parameters for each task | required |
 | tower_params_list | list | Task-specific tower network parameters list | None |
-| attention_params | dict | Attention mechanism parameters | None |
+
+All AITM tasks are currently fixed to binary classification, and information is transferred from each task column to the next. The constructor does not accept `task_types` or `attention_params`.
 
 ### Use Cases
 
@@ -301,11 +300,14 @@ model = AITM(
 
 4. **Multi-task weight adjustment**:
    - Adjust loss weights to balance task importance
-   - Try adaptive weight methods like UWLLoss, GradNorm, etc.
+   - The currently usable adaptive method is `adaptive_params={"method": "uwl"}`.
 
 ## 8. Complete Training Example
 
 ```python
+import os
+import numpy as np
+
 from torch_rechub.models.multi_task import MMOE
 from torch_rechub.trainers import MTLTrainer
 from torch_rechub.utils.data import DataGenerator
@@ -327,10 +329,7 @@ x = {
     "age": age_data,
     "income": income_data
 }
-y = {
-    "task1": task1_labels,  # CTR labels
-    "task2": task2_labels   # CVR labels
-}
+y = np.column_stack([task1_labels, task2_labels])
 
 # 3. Create data generator
 dg = DataGenerator(x, y)
@@ -353,14 +352,15 @@ trainer = MTLTrainer(
     model=model,
     task_types=["classification", "classification"],
     optimizer_params={"lr": 0.001, "weight_decay": 0.0001},
-    adaptive_params={"method": "uwl"},  # Use adaptive loss weighting
+    adaptive_params={"method": "uwl"},  # currently usable adaptive weighting
     n_epoch=50,
     earlystop_patience=10,
-    device="cuda:0",
+    device="cpu",
     model_path="saved/mmoe"
 )
 
 # 6. Train model
+os.makedirs("saved/mmoe", exist_ok=True)
 trainer.fit(train_dl, val_dl)
 
 # 7. Evaluate model
@@ -383,7 +383,7 @@ A: Try the following approaches:
 - Standardize or normalize data for each task
 - Use task-specific embedding layers
 - Adjust task weights to balance task importance
-- Use adaptive weight methods like UWLLoss, GradNorm, etc.
+- Use the currently supported UWL adaptive weighting.
 
 ### Q: How to mitigate negative transfer in multi-task learning?
 A: Try the following approaches:
@@ -431,21 +431,8 @@ A: Try the following approaches:
    - Jointly optimize loan application rate, repayment rate, default rate
    - Optimize financial product recommendation, credit card recommendation
 
-## 11. Future Trends
+## 11. Current Implementation Boundaries
 
-1. **Dynamic Task Weight Adjustment**:
-   - Adaptively adjust task weights based on task importance and difficulty
-
-2. **Cross-domain Multi-task Learning**:
-   - Leverage data and tasks from different domains to improve model generalization
-
-3. **Hierarchical Multi-task Learning**:
-   - Build hierarchical relationships between tasks to better utilize structural information
-
-4. **Multi-modal Multi-task Learning**:
-   - Combine text, image, audio, and other modalities to learn multiple tasks simultaneously
-
-5. **Large-scale Multi-task Learning**:
-   - Support learning hundreds or thousands of tasks simultaneously for more complex recommendation scenarios
-
-Multi-task learning has broad application prospects in recommendation systems, effectively leveraging task relationships to improve model generalization and performance. Torch-RecHub provides various advanced multi-task models for developers to choose based on business requirements.
+- Models on this page consume structured `Feature` inputs; the project does not include text, image, or audio encoders.
+- Task count is configured explicitly through `task_types` or `n_task`. The current implementations target experiments with a small number of tasks and do not provide sparse gating or distributed training for hundreds or thousands of tasks.
+- UWL is the currently usable adaptive-loss method in `MTLTrainer`. `gradnorm` and `metabalance` cannot complete normal training in the current implementation and should not be enabled.

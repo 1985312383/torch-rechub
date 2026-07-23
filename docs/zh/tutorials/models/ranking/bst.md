@@ -49,13 +49,14 @@ n_users = data["user_id"].max()
 n_items = data["item_id"].max()
 n_cates = data["cate_id"].max()
 
-# 特征定义（与 DIN 相同的模式）
+# features 只是用户画像/上下文；历史与目标特征另行配对
 features = [
-    SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
-    SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
     SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)
 ]
-target_features = features
+target_features = [
+    SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
+    SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8)
+]
 history_features = [
     SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8,
                     pooling="concat", shared_with="target_item_id"),
@@ -99,15 +100,15 @@ model = BST(
 
 | 参数 | 类型 | 说明 | 建议值 |
 |------|------|------|--------|
-| `features` | `list[Feature]` | 目标物品特征 + 用户特征，同时作为 `target_features` 传入 | |
+| `features` | `list[Feature]` | 用户画像和上下文特征，不含历史与目标特征 | |
 | `history_features` | `list[Feature]` | 历史行为序列 (pooling=`"concat"`) | |
-| `target_features` | `list[Feature]` | 与 `features` 相同 | |
+| `target_features` | `list[Feature]` | 当前候选物品特征，其 `embed_dim` 总和必须等于历史特征的总和 | |
 | `mlp_params` | `dict` | 顶层 MLP 参数（`activation` 已内置为 `leakyrelu`，无需传入） | `{"dims": [256, 128]}` |
 | `nhead` | `int` | Transformer 多头注意力头数 | 4 或 8 |
 | `dropout` | `float` | Transformer 内部 dropout | 0.1 ~ 0.3 |
 | `num_layers` | `int` | Transformer Encoder 层数 | 1 ~ 3 |
 
-> **注意**: `embed_dim` 必须能被 `nhead` 整除。例如 `embed_dim=8` 时，`nhead` 可以为 1, 2, 4, 8。
+> **注意**: Transformer 的实际维度是所有历史特征 `embed_dim` 的总和。本例为 `8 + 8 = 16`，因此 `nhead=8` 可用。该总和必须能被 `nhead` 整除，并且必须等于目标特征的维度总和。
 
 ---
 
@@ -157,8 +158,8 @@ print(f"Test AUC: {auc:.4f}")
 - DIN 用 Target Attention 只关注目标物品与历史的关系
 - BST 用 Self-Attention 能捕捉历史物品之间的相互关系（如买了手机壳 → 买了贴膜）
 
-### Q2: embed_dim 和 nhead 不匹配导致报错？
-Transformer 要求 `embed_dim % nhead == 0`。如果特征 `embed_dim=8`，则 `nhead` 只能是 1, 2, 4, 8。
+### Q2: 特征维度和 nhead 不匹配导致报错？
+Transformer 要求 `sum(history_feature.embed_dim) % nhead == 0`，而且历史特征与目标特征的维度总和要相等。本例两个历史特征各为 8 维，Transformer 维度是 16。
 
 ### Q3: BST 线上推理速度如何？
 Self-Attention 计算量为 $O(n^2d)$，短序列（<50）延迟可接受。长序列建议截断或使用 DIN 替代。
@@ -209,11 +210,12 @@ def main():
     n_users, n_items, n_cates = data["user_id"].max(), data["item_id"].max(), data["cate_id"].max()
 
     features = [
-        SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
-        SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
         SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)
     ]
-    target_features = features
+    target_features = [
+        SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
+        SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8)
+    ]
     history_features = [
         SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8, pooling="concat", shared_with="target_item_id"),
         SequenceFeature("hist_cate_id", vocab_size=n_cates + 1, embed_dim=8, pooling="concat", shared_with="target_cate_id")

@@ -15,26 +15,39 @@ description: Torch-RecHub 详细安装说明，包括稳定版和最新版安装
 - **PyTorch 1.10+**（根据硬件选择 CPU、NVIDIA CUDA、AMD ROCm 或华为昇腾 NPU 版本）
 - **NumPy**
 - **Pandas**
-- **SciPy**
 - **Scikit-learn**
 
 ## 安装方式
 
-PyTorch 与硬件、驱动和运行时版本强相关。安装前建议先查看对应官方适配文档：[NVIDIA CUDA / PyTorch 版本](https://pytorch.org/get-started/previous-versions/)、[Huawei Ascend NPU / PyTorch 版本](https://www.hiascend.com/document/detail/zh/Pytorch/2600/releasenote/docs/zh/release_notes/release_notes.md)、[AMD ROCm / PyTorch 版本](https://rocm.docs.amd.com/en/latest/compatibility/ml-compatibility/pytorch-compatibility.html)。
+PyTorch 与操作系统、硬件、驱动和运行时版本强相关。CPU 用户可以直接安装 Torch-RecHub；NVIDIA CUDA、AMD ROCm 或华为昇腾 NPU 用户应先按官方文档选择匹配的 PyTorch 构建：[PyTorch 安装选择器](https://pytorch.org/get-started/locally/)、[AMD ROCm / PyTorch 兼容性](https://rocm.docs.amd.com/en/latest/compatibility/ml-compatibility/pytorch-compatibility.html)、[Huawei Ascend NPU / PyTorch 版本配套](https://www.hiascend.com/document/detail/zh/Pytorch/2600/releasenote/docs/zh/release_notes/release_notes.md)。硬件安装命令会随版本变化，请以这些官方页面当前生成的命令为准。
 
 ### 稳定版（推荐用户使用）
 
 最简单的安装方式是通过 pip：
 
 ```bash
-# 根据设备选择对应的 PyTorch 版本，只需安装其中一种
-pip install torch                                                     # CPU
-pip install torch --index-url https://download.pytorch.org/whl/cu121  # NVIDIA GPU (CUDA 12.1)
-pip install torch torch-npu                                           # Huawei Ascend NPU (需要 torch-npu >= 2.5.1)
-pip install --index-url https://repo.amd.com/rocm/whl/gfx1151/ "rocm[libraries,devel]" torch torchvision torchaudio  # AMD GPU (ROCm, gfx1151 = Ryzen AI Max+ 395/390/385)
+# CPU 环境会自动安装项目声明的 PyTorch 依赖
+python -m pip install torch-rechub
 
-pip install torch-rechub
+# CUDA / ROCm / NPU 环境：先按上方官方指引安装 PyTorch，再执行
+python -m pip install torch-rechub
 ```
+
+### 可选功能
+
+默认安装只包含核心训练依赖。按实际用途选择 extra：
+
+| 用途 | 安装命令 |
+|---|---|
+| 生成式模型 | `python -m pip install "torch-rechub[generative]"` |
+| Parquet 流式数据 | `python -m pip install "torch-rechub[bigdata]"` |
+| ONNX 导出与量化 | `python -m pip install "torch-rechub[onnx]"` |
+| 模型可视化 | `python -m pip install "torch-rechub[visualization]"` |
+| 实验跟踪 | `python -m pip install "torch-rechub[tracking]"` |
+| 统一向量索引工厂（Annoy + Faiss + Milvus） | `python -m pip install "torch-rechub[annoy,faiss,milvus]"` |
+| 全部可选功能 | `python -m pip install "torch-rechub[all]"` |
+
+> 当前 `torch_rechub.serving` 初始化时会同时导入 Annoy、Faiss 和 Milvus 后端。如果要使用 `from torch_rechub.serving import builder_factory`，需安装表中的三个 extra；只安装单一后端目前不足以导入该统一入口。
 
 ### 最新开发版
 
@@ -42,20 +55,17 @@ pip install torch-rechub
 
 ```bash
 # 首先安装 uv（如果尚未安装）
-pip install uv
+python -m pip install uv
 
 # 克隆并安装
 git clone https://github.com/datawhalechina/torch-rechub.git
 cd torch-rechub
 
-# 根据设备选择对应的 PyTorch 版本，只需安装其中一种
-uv pip install torch                                                     # CPU
-uv pip install torch --index-url https://download.pytorch.org/whl/cu121  # NVIDIA GPU (CUDA 12.1)
-uv pip install torch torch-npu                                           # Huawei Ascend NPU (需要 torch-npu >= 2.5.1)
-uv pip install --index-url https://repo.amd.com/rocm/whl/gfx1151/ "rocm[libraries,devel]" torch torchvision torchaudio  # AMD GPU (ROCm, gfx1151 = Ryzen AI Max+ 395/390/385)
-
+# 创建 .venv、安装锁定依赖，并以可编辑方式安装当前项目
 uv sync
 ```
+
+CUDA、ROCm 或 NPU 开发环境仍需先按官方兼容性文档确定 PyTorch 与运行时的组合；不要盲目复用其他机器的 wheel 地址。
 
 ## 开发环境设置
 
@@ -69,8 +79,8 @@ cd torch-rechub
 # 2. 安装依赖并设置环境
 uv sync
 
-# 3. 以开发模式安装包
-uv pip install -e .
+# 3. 运行测试（uv sync 已以可编辑方式安装当前项目）
+uv run pytest
 ```
 
 ## 验证安装
@@ -80,6 +90,15 @@ uv pip install -e .
 ```python
 import torch_rechub
 print(torch_rechub.__version__)
+```
+
+如果还需确认 PyTorch 识别到的设备，可运行：
+
+```python
+import torch
+
+print(torch.__version__)
+print("CUDA available:", torch.cuda.is_available())
 ```
 
 或运行一个简单的示例：
@@ -98,18 +117,11 @@ python run_ml_dssm.py
 
 ### NVIDIA GPU 支持
 
-要获得 NVIDIA GPU 加速，请确保您拥有：
-- NVIDIA GPU，计算能力 3.5 或更高
-- 已安装 CUDA Toolkit
-- 已安装 cuDNN 库
+请使用 [PyTorch 安装选择器](https://pytorch.org/get-started/locally/) 按操作系统和 CUDA 环境生成命令。安装后以 `torch.cuda.is_available()` 的返回值验证当前 Python 环境。
 
 ### AMD GPU 支持（ROCm）
 
-如果您使用的是 Ryzen AI Max+ 395/390/385 等 `gfx1151` 设备，可以通过 AMD 的 ROCm wheel 源安装 ROCm 和 PyTorch：
-
-```bash
-uv pip install --index-url https://repo.amd.com/rocm/whl/gfx1151/ "rocm[libraries,devel]" torch torchvision torchaudio
-```
+请先在 [AMD ROCm / PyTorch 兼容性文档](https://rocm.docs.amd.com/en/latest/compatibility/ml-compatibility/pytorch-compatibility.html) 中确认操作系统、GPU 架构、ROCm 和 PyTorch 版本组合，再使用对应的官方安装命令。
 
 ### NPU 支持（华为昇腾）
 
@@ -120,8 +132,8 @@ Torch-RecHub 支持华为昇腾 NPU 设备，测试设备为 **华为昇腾 910B
 安装完成后，需要在代码中导入 `torch_npu`，然后在 Trainer 中指定设备即可：
 
 ```python
-import torch
 import torch_npu
+from torch_rechub.trainers import CTRTrainer
 
 trainer = CTRTrainer(model, device='npu:0')
 ```
@@ -131,5 +143,5 @@ trainer = CTRTrainer(model, device='npu:0')
 如果您遇到任何安装问题，请：
 1. 查看 [GitHub Issues](https://github.com/datawhalechina/torch-rechub/issues)
 2. 创建新的 Issue，并提供详细的错误信息和系统信息
-3. 参考 常见问题解答 部分
+3. 参考 [常见问题解答](/zh/community/faq)
 

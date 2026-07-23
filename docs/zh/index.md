@@ -40,7 +40,7 @@ features:
 
   - icon: 生成式
     title: 生成式扩展
-    details: 在同一套训练与部署约定下探索生成式推荐方向。
+    details: 覆盖序列建模、语义 ID 量化与生成式推荐等方向。
     link: /zh/models/generative
     linkText: 查看生成式模型
 

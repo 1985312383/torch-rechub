@@ -65,19 +65,21 @@ n_cates = data["cate_id"].max()
 
 ### 2.2 定义特征列表
 
-DIN 的特征分为三类：`features`（包含目标物品特征和用户特征）、`target_features`（与 features 相同）、`history_features`（历史序列特征）。`target_features` 与 `history_features` 必须**一一对应**计算 Attention。
+DIN 的特征分为三类：`features`（用户画像和上下文）、`target_features`（当前候选物品）、`history_features`（历史序列）。`target_features` 与 `history_features` 必须在数量、顺序和 `embed_dim` 上**一一对应**，模型内部按下标配对计算 Attention。
 
 ```python
-# 1. 特征列表（目标物品 + 用户属性）
-# DIN 的关键是“目标物品”和“历史行为”成对做注意力，所以 target 特征会直接影响激活结果
+# 1. 用户画像 / 上下文特征（不要重复放 target 特征）
 features = [
+    SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8),
+]
+
+# 2. 当前候选物品特征
+target_features = [
     SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
     SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
-    SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)
 ]
-target_features = features
 
-# 2. 历史行为序列特征 (History Features)
+# 3. 历史行为序列特征 (History Features)
 # 注意：shared_with 参数必须指向对应的 target 特征，确保它们共享 Embedding 空间
 history_features = [
     SequenceFeature(
@@ -142,9 +144,9 @@ model = DIN(
 
 | 参数 | 类型 | 说明 | 建议值 |
 |------|------|------|--------|
-| `features` | `list[Feature]` | 目标物品特征 + 用户特征，同时作为 `target_features` 传入 | |
+| `features` | `list[Feature]` | 用户画像和上下文特征，不含历史与目标特征 | |
 | `history_features` | `list[Feature]` | 历史序列特征，必须是 `SequenceFeature` 且 pooling 为 `"concat"` | |
-| `target_features` | `list[Feature]` | 与 `features` 相同，用于与历史做 Attention | |
+| `target_features` | `list[Feature]` | 当前候选物品特征，与 `history_features` 按下标配对 | |
 | `mlp_params` | `dict` | 顶层预测 MLP 的参数（`activation` 已内置为 `dice`，无需传入） | `{"dims": [256, 128]}` |
 | `attention_mlp_params` | `dict` | 目标注意力网络 (Activation Unit) 的参数（默认 `activation="dice"`, `use_softmax=False`） | `{"dims": [256, 128]}` |
 
@@ -260,11 +262,12 @@ def main():
 
     # 3. 定义特征
     features = [
-        SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
-        SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
         SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8)
     ]
-    target_features = features
+    target_features = [
+        SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
+        SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8)
+    ]
     history_features = [
         SequenceFeature("hist_item_id", vocab_size=n_items + 1, embed_dim=8, pooling="concat", shared_with="target_item_id"),
         SequenceFeature("hist_cate_id", vocab_size=n_cates + 1, embed_dim=8, pooling="concat", shared_with="target_cate_id")

@@ -23,23 +23,24 @@ Thank you for your interest in Torch-RecHub! We welcome all forms of contributio
 git clone https://github.com/YOUR_USERNAME/torch-rechub.git
 cd torch-rechub
 
-# 2. Install dependencies and set up environment
-uv sync
+# 2. Create the environment and install development plus all optional dependencies
+# uv sync installs the current project editable; no separate pip install -e . is needed
+uv sync --all-extras
 
-# 3. Install package in development mode
-uv pip install -e .
+# 3. Create a working branch
+git switch -c docs/update-guide
 ```
 
 ### Development Workflow
 
 1. **Fork the repository**: Click the "Fork" button in the top right corner.
-2. **Make changes**: Implement new features or fix bugs.
+2. **Create a branch and make changes**: Implement new features or fix bugs.
 3. **Format code**: Run code formatting before committing to ensure consistent style:
    ```bash
-   python config/format_code.py
+   uv run python config/format_code.py
    ```
 4. **Commit changes**: `git commit -m "feat: add new feature"` or `git commit -m "fix: fix some issue"` (following [Conventional Commits](https://www.conventionalcommits.org/) is recommended).
-5. **Push to branch**: `git push origin`
+5. **Push to branch**: `git push -u origin your-branch-name`
 6. **Create Pull Request**: Return to the original repository page, click "New pull request", compare your branch with the main repository's `main` branch, then submit the PR.
 
 ## Code Standards
@@ -48,7 +49,7 @@ uv pip install -e .
 
 - `feature/feature-name` - New features
 - `fix/bug-description` - Bug fixes
-- `docs/documentation-update` - Documentation updates
+- `docs/update-install-guide` - Documentation updates (this is a Git branch name)
 - `test/test-description` - Test additions
 
 ### Commit Messages
@@ -65,7 +66,7 @@ We follow the [Conventional Commits](https://www.conventionalcommits.org/) speci
 
 1. **Push your branch**
    ```bash
-   git push origin your-branch-name
+   git push -u origin your-branch-name
    ```
 
 2. **Create Pull Request**
@@ -96,10 +97,17 @@ We follow the [Conventional Commits](https://www.conventionalcommits.org/) speci
 uv run pytest
 
 # Run specific test file
-uv run pytest tests/test_models/test_ranking.py
+uv run pytest tests/test_e2e_ranking.py
 
 # Run with coverage report
 uv run pytest --cov=torch_rechub
+```
+
+Milvus integration tests require a reachable external service. Skip them when that environment is unavailable:
+
+```powershell
+$env:SKIP_MILVUS_TESTS = "1"
+uv run pytest
 ```
 
 ## Documentation
@@ -117,7 +125,16 @@ uv run pytest --cov=torch_rechub
 - Include code examples
 - Provide clear step-by-step instructions
 - Keep English and Chinese versions in sync
-- Follow Google-style Python docstrings
+- Use the project's existing NumPy/SciPy docstring style, with sections such as `Parameters` and `Returns`
+
+### Build Documentation Locally
+
+```bash
+npm ci
+npm run docs:build
+```
+
+For documentation changes, run `npm run docs:build` at least once and keep corresponding pages under `docs/zh` and `docs/en` synchronized.
 
 ## Contribution Ideas
 
@@ -164,7 +181,6 @@ We value every contribution! All contributors will be recognized in:
 
 - Contributors list in README
 - Acknowledgments in release notes
-- Contributors page in project documentation
 - Special mentions for significant contributions
 
 ## Code of Conduct

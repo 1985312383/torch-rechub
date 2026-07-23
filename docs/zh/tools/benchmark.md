@@ -7,6 +7,12 @@ description: Torch-RecHub 可复现模型对比 benchmark
 
 `benchmarks/` 提供固定实验协议下的可复现模型对比，与 `examples/` 分开维护：`examples/` 侧重教学，`benchmarks/` 侧重横向比较。
 
+从已安装的包运行 benchmark 前需安装 YAML extra；在仓库开发环境中也可使用同一命令补齐依赖：
+
+```bash
+pip install "torch-rechub[benchmark]"
+```
+
 ## 快速运行
 
 在仓库根目录执行：
@@ -25,9 +31,9 @@ python benchmarks/suite.py \
 
 - `result.yaml`：结构化指标 + 运行元数据（git commit、Python/Torch 版本、时间戳）
 - `summary.md`：人类可读摘要
-- `model.pth`：模型权重
+- 模型权重：Matching/Ranking 为 `model.pth`；Multi-Task 当前为 `model_base_0.pth`
 
-Suite 额外写出 `suite.md` 对比表，例如：
+Suite 额外写出 `suite.yaml` 和 `suite.md` 对比表，例如：
 
 | model | dataset | params | Hit@10 | NDCG@10 | train_s |
 | --- | --- | --- | --- | --- | --- |

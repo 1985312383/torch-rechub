@@ -46,7 +46,7 @@ y: [batch_size, 1 + n_neg_items]
 ### 适用场景
 
 - 推荐系统**召回阶段**
-- 用户兴趣具有**多样性**的场景（如掏宝用户同时对手机、服装、食品感兴趣）
+- 用户兴趣具有**多样性**的场景（如淘宝用户同时对手机、服装、食品感兴趣）
 - 大规模候选集的 ANN 检索
 
 ---
@@ -242,16 +242,21 @@ DSSM 每个用户只有 1 个向量，MIND 有 `interest_num` 个向量。线上
 
 ---
 
-## 8. 模型可视化
+## 8. 模型可视化限制
 
-```python
-from torch_rechub.utils.visualization import visualize_model
-visualize_model(model, save_path="mind_architecture.png", dpi=300)
-```
+项目的可视化工具需要先安装 `pip install "torch-rechub[visualization]"` 和系统 Graphviz。不过，当前 MIND 的动态路由循环不能被 `torchview` 稳定追踪，因此不要直接对 MIND 调用 `visualize_model()`；本页只保留前文的结构与张量形状说明。
 
 ---
 
 ## 9. ONNX 导出
+
+先安装 ONNX 可选依赖：
+
+```bash
+pip install "torch-rechub[onnx]"
+```
+
+动态路由会按示例输入的序列长度参与追踪，导出后务必用真实输入验证输出。最小导出方式如下：
 
 ```python
 from torch_rechub.utils.onnx_export import ONNXExporter

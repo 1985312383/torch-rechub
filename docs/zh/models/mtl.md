@@ -84,13 +84,10 @@ from torch_rechub.models.multi_task import ESMM
 
 # 创建模型
 model = ESMM(
-    features=common_features,
-    task_types=["classification", "classification"],  # CTR和CVR都是分类任务
-    bottom_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
-    tower_params_list=[
-        {"dims": [64, 32], "dropout": 0.2, "activation": "relu"},  # CTR任务的顶层参数
-        {"dims": [64, 32], "dropout": 0.2, "activation": "relu"}   # CVR任务的顶层参数
-    ]
+    user_features=user_features,
+    item_features=item_features,
+    cvr_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
+    ctr_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
 )
 ```
 
@@ -98,10 +95,12 @@ model = ESMM(
 
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
-| features | list | 所有任务共享的特征列表 | None |
-| task_types | list | 任务类型列表，支持 "classification" | None |
-| bottom_params | dict | 共享底层网络参数 | None |
-| tower_params_list | list | 任务特定顶层网络参数列表 | None |
+| user_features | list | 用户侧稀疏特征 | 必填 |
+| item_features | list | 物品侧稀疏特征 | 必填 |
+| cvr_params | dict | CVR tower 的 MLP 参数 | 必填 |
+| ctr_params | dict | CTR tower 的 MLP 参数 | 必填 |
+
+`ESMM.forward()` 的列顺序固定为 `[cvr, ctr, ctcvr]`。使用 `MTLTrainer` 时，标签也要按这一顺序组成 `[B, 3]`，`task_types` 传入三个 `"classification"`。训练器针对 ESMM 只直接优化 CTR 和 CTCVR 两列损失。
 
 ### 适用场景
 
@@ -131,6 +130,9 @@ Ma, Jiaqi, et al. "Modeling task relationships in multi-task learning with multi
 ### 使用方法
 
 ```python
+import os
+import numpy as np
+
 from torch_rechub.models.multi_task import MMOE
 
 # 创建模型
@@ -247,13 +249,12 @@ from torch_rechub.models.multi_task import AITM
 # 创建模型
 model = AITM(
     features=common_features,
-    task_types=["classification", "classification"],
+    n_task=2,
     bottom_params={"dims": [256, 128], "dropout": 0.2, "activation": "relu"},
     tower_params_list=[
         {"dims": [64, 32], "dropout": 0.2, "activation": "relu"},  # 任务1的顶层参数
         {"dims": [64, 32], "dropout": 0.2, "activation": "relu"}   # 任务2的顶层参数
     ],
-    attention_params={"attention_dim": 64, "dropout": 0.2}  # 注意力机制参数
 )
 ```
 
@@ -262,10 +263,11 @@ model = AITM(
 | 参数 | 类型 | 描述 | 默认值 |
 | --- | --- | --- | --- |
 | features | list | 所有任务共享的特征列表 | None |
-| task_types | list | 任务类型列表，支持 "classification" 和 "regression" | None |
-| bottom_params | dict | 共享底层网络参数 | None |
+| n_task | int | 有顺序依赖的二分类任务数 | 必填 |
+| bottom_params | dict | 每个任务的 bottom MLP 参数 | 必填 |
 | tower_params_list | list | 任务特定顶层网络参数列表 | None |
-| attention_params | dict | 注意力机制参数 | None |
+
+AITM 当前所有任务都固定为二分类，并按任务列顺序从前一任务向后一任务传递信息；不接受 `task_types` 或 `attention_params`。
 
 ### 适用场景
 
@@ -301,11 +303,14 @@ model = AITM(
 
 4. **多任务权重调整**：
    - 可以通过调整损失权重来平衡不同任务的重要性
-   - 尝试使用自适应权重方法，如 UWLLoss、GradNorm 等
+   - 当前可使用 `adaptive_params={"method": "uwl"}` 做自适应权重
 
 ## 8. 代码示例：完整的多任务模型训练流程
 
 ```python
+import os
+import numpy as np
+
 from torch_rechub.models.multi_task import MMOE
 from torch_rechub.trainers import MTLTrainer
 from torch_rechub.utils.data import DataGenerator
@@ -320,17 +325,14 @@ common_features = [
 ]
 
 # 2. 准备数据
-# 假设 x 包含所有特征，y 包含两个任务的标签
+# 假设 x 包含所有特征，y 是 [n_samples, n_tasks] 的二维数组
 x = {
     "user_id": user_id_data,
     "city": city_data,
     "age": age_data,
     "income": income_data
 }
-y = {
-    "task1": task1_labels,  # 点击率标签
-    "task2": task2_labels   # 转化率标签
-}
+y = np.column_stack([task1_labels, task2_labels])
 
 # 3. 创建数据生成器
 dg = DataGenerator(x, y)
@@ -353,14 +355,15 @@ trainer = MTLTrainer(
     model=model,
     task_types=["classification", "classification"],
     optimizer_params={"lr": 0.001, "weight_decay": 0.0001},
-    adaptive_params={"method": "uwl"},  # 使用自适应损失权重
+    adaptive_params={"method": "uwl"},  # 当前可用的自适应损失权重
     n_epoch=50,
     earlystop_patience=10,
-    device="cuda:0",
+    device="cpu",
     model_path="saved/mmoe"
 )
 
 # 6. 训练模型
+os.makedirs("saved/mmoe", exist_ok=True)
 trainer.fit(train_dl, val_dl)
 
 # 7. 评估模型
@@ -383,7 +386,7 @@ A: 可以尝试以下方法：
 - 对每个任务的数据进行标准化或归一化
 - 使用任务特定的Embedding层
 - 调整任务权重，平衡不同任务的重要性
-- 使用自适应权重方法，如UWLLoss、GradNorm等
+- 使用当前可用的 UWL 自适应权重
 
 ### Q: 如何缓解多任务学习中的负迁移问题？
 A: 可以尝试以下方法：
@@ -431,21 +434,8 @@ A: 可以尝试以下方法：
    - 同时优化贷款申请率、还款率、逾期率
    - 优化理财产品推荐、信用卡推荐
 
-## 11. 未来发展趋势
+## 11. 当前实现边界
 
-1. **动态任务权重调整**：
-   - 自适应地调整不同任务的权重，根据任务的重要性和难度动态变化
-
-2. **跨领域多任务学习**：
-   - 利用不同领域的数据和任务，提高模型的泛化能力
-
-3. **层次化多任务学习**：
-   - 构建任务间的层次关系，更有效地利用任务间的结构信息
-
-4. **多模态多任务学习**：
-   - 结合文本、图像、音频等多种模态，同时学习多个任务
-
-5. **大规模多任务学习**：
-   - 支持数百个甚至数千个任务的同时学习，处理更复杂的推荐场景
-
-多任务学习在推荐系统中具有广阔的应用前景，能够充分利用任务间的关系，提高模型的泛化能力和性能。Torch-RecHub 提供了多种先进的多任务模型，方便开发者根据业务需求选择和使用。
+- 本页模型接收结构化 `Feature` 输入；项目没有内置文本、图像、音频等多模态编码器。
+- 任务数由 `task_types` 或 `n_task` 显式配置。当前实现面向少量任务实验，未提供数百/数千任务的稀疏门控或分布式训练方案。
+- `MTLTrainer` 当前可用的自适应损失方法是 UWL；`gradnorm` 与 `metabalance` 在现有实现中不能完成正常训练，请不要启用。

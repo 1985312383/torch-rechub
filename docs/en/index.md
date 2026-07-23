@@ -40,7 +40,7 @@ features:
 
   - icon: G
     title: Generative Extensions
-    details: Explore generative recommendation directions with the same data, trainer, and deployment conventions.
+    details: Covers sequence modeling, semantic ID quantization, and generative recommendation workflows.
     link: /models/generative
     linkText: Explore generative models
 

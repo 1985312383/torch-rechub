@@ -175,7 +175,30 @@ trainer = MatchTrainer(
 trainer.fit(train_dl)
 ```
 
-### 3. Export embeddings
+### 3. In-batch negatives (optional)
+
+For models with `user_tower()` / `item_tower()` methods whose outputs are both 2-D tensors, such as DSSM, `MatchTrainer` can use other items in the same batch as negatives:
+
+```python
+os.makedirs("./saved/dssm_inbatch", exist_ok=True)
+
+trainer = MatchTrainer(
+    model,
+    mode=0,
+    in_batch_neg=True,
+    in_batch_neg_ratio=3,
+    hard_negative=False,  # True selects the highest-scoring negatives in this batch
+    sampler_seed=2022,
+    optimizer_params={"lr": 1e-4},
+    n_epoch=2,
+    device="cpu",
+    model_path="./saved/dssm_inbatch",
+)
+```
+
+This mode builds a `[B, B]` user-item score matrix. Each diagonal pair `(user_i, item_i)` must be the original positive pair; only off-diagonal positions are negative candidates. Batch size must be greater than 1 and `in_batch_neg_ratio <= batch_size - 1`. Other true positives in the batch can still become false negatives. `sampler_seed` makes random sampling reproducible.
+
+### 4. Export embeddings
 
 ```python
 user_embedding = trainer.inference_embedding(
@@ -289,11 +312,11 @@ from torch_rechub.utils.match import Annoy
 
 annoy = Annoy(n_trees=10)
 annoy.fit(item_embedding)
-similar_items, scores = annoy.query(user_embedding[0], topk=10)
+similar_items, scores = annoy.query(user_embedding[0], n=10)
 print(similar_items)
 ```
 
-> If the dependency is missing, install it first, for example: `pip install annoy`.
+> If the dependency is missing, install it first, for example: `pip install "torch-rechub[annoy]"`.
 
 ## 5. FAQ
 

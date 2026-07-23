@@ -103,6 +103,7 @@ const rootSidebar = {
         { text: 'Matching Models Guide', link: '/blog/match' },
         { text: 'Ranking Models Guide', link: '/blog/rank' },
         { text: 'HLLM Reproduction', link: '/blog/hllm_reproduction' },
+        { text: 'HSTU Reproduction', link: '/blog/hstu_reproduction' },
         { text: 'TIGER Reproduction', link: '/blog/tiger_reproduction' },
       ],
     },

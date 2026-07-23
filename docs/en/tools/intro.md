@@ -14,6 +14,7 @@ Torch-RecHub provides a rich set of development tools to help developers more ef
 | **Callbacks** | Early stopping, model saving during training | [Callbacks](/tools/callbacks) |
 | **Experiment Tracking** | WandB, SwanLab, TensorBoardX integration | [Experiment Tracking](/tools/tracking) |
 | **Model Visualization** | Model architecture graph generation and display | [Visualization](/tools/visualization) |
+| **Benchmark** | Model comparison and baseline regression under a fixed protocol | [Benchmark](/tools/benchmark) |
 
 ## Callbacks
 
@@ -127,7 +128,7 @@ loss = hinge_loss(pos_score, neg_score)
 
 ### NCELoss
 
-Noise Contrastive Estimation loss for generative recommendation models.
+Classification loss that applies temperature scaling and log-softmax to logits over all classes, used by the current generative recommendation trainers. Despite its name, the current `NCELoss` implementation does not sample noise or automatically construct in-batch negatives.
 
 ```python
 from torch_rechub.basic.loss_func import NCELoss
@@ -141,4 +142,5 @@ loss = nce_loss(logits, targets)
 - Learn about [Callbacks](/tools/callbacks) in detail
 - Learn about [Experiment Tracking](/tools/tracking) configuration
 - Learn about [Visualization](/tools/visualization) usage
+- Use [Benchmark](/tools/benchmark) for reproducible experiments and regression checks
 

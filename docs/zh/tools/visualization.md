@@ -9,7 +9,7 @@ Torch-RecHub 提供了模型架构可视化功能，帮助开发者直观地理�
 
 ## 为什么选择 torchview
 
-Torch-RecHub 采用 [torchview](https://github.com/mert-kurttutan/torchview) 作为可视化后端，而非其他常见方案（如 torchviz、netron），**最核心的原因是：torchview 是唯一支持复杂字典输入的可视化工具**。
+Torch-RecHub 采用 [torchview](https://github.com/mert-kurttutan/torchview) 作为可视化后端。项目的包装层会把特征字典作为单个位置参数传给模型，因此可以追踪推荐模型常见的字典输入。
 
 推荐系统模型的输入通常是包含多种特征类型的字典：
 
@@ -23,21 +23,21 @@ x = {
 model(x)  # 字典作为输入
 ```
 
-其他可视化工具（torchviz、netron 等）仅支持简单的 Tensor 输入，无法处理这种字典形式的复杂输入结构。
+torchviz 基于 autograd 图，Netron 主要查看已导出的静态模型；三者用途不同，不能简单归结为是否“支持字典”。
 
 > **提示**：如果你已将模型导出为 ONNX 格式，也可以使用 [Netron](https://netron.app/) 在线查看模型结构。详见 [ONNX 导出文档](/zh/serving/onnx)。
 
 | 特性 | torchview | torchviz | netron |
 |------|-----------|----------|--------|
-| **支持字典输入** | ✅ | ❌ | ❌ (需先导出 ONNX) |
+| **本项目字典输入包装** | ✅ | 需自行包装 | 需先导出模型 |
 | 基于前向传播追踪 | ✅ | ❌ (基于 autograd) | ❌ (静态解析) |
-| 支持动态控制流 | ✅ | ❌ | ❌ |
+| 展示一次实际执行路径 | ✅ | ✅ | ❌（静态解析） |
 | 显示张量形状 | ✅ | ❌ | ✅ |
 | 可调节展示深度 | ✅ | ❌ | ❌ |
 | 嵌套模块展开 | ✅ | ❌ | 部分 |
 
 **其他优势**：
-- **前向追踪**：通过 hook 机制追踪前向传播，准确捕获注意力机制、多塔结构等动态结构
+- **前向追踪**：通过一次前向传播捕获本次输入实际经过的模块；未执行的控制流分支不会出现在图中
 - **层级控制**：通过 `depth` 参数灵活控制展示粒度
 - **形状可视化**：直观显示各层输入输出的张量形状
 
@@ -46,7 +46,7 @@ model(x)  # 字典作为输入
 可视化功能需要安装额外依赖：
 
 ```bash
-pip install torch-rechub[visualization]
+pip install "torch-rechub[visualization]"
 ```
 
 同时需要安装系统级 graphviz：
@@ -147,7 +147,8 @@ from torch_rechub.basic.features import DenseFeature, SparseFeature
 dense_features = [DenseFeature("age"), DenseFeature("income")]
 sparse_features = [
     SparseFeature("city", vocab_size=100, embed_dim=16),
-    SparseFeature("gender", vocab_size=3, embed_dim=8)
+    # FM 交互中的稀疏特征需使用相同 embedding 维度
+    SparseFeature("gender", vocab_size=3, embed_dim=16)
 ]
 
 # 创建模型

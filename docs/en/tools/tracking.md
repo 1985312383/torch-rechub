@@ -16,7 +16,7 @@ Goal: zero overhead by default. If you want tracking, pass `model_logger` to a T
 
 ```bash
 # all tracking deps
-pip install torch-rechub[tracking]
+pip install "torch-rechub[tracking]"
 
 # or individually
 pip install wandb
@@ -57,13 +57,23 @@ sb = SwanLabLogger(project="my-ctr")
 trainer = CTRTrainer(model, model_logger=[tb, wb, sb])
 ```
 
-### Set API keys in code
+### Configure API keys
 
-```python
-import os
-os.environ['WANDB_API_KEY'] = "your API_KEY"
-os.environ['SWANLAB_API_KEY'] = "your API_KEY"
+```bash
+# bash/zsh: set only in the current shell
+export WANDB_API_KEY="..."
+export SWANLAB_API_KEY="..."
 ```
+
+```powershell
+# PowerShell: set only in the current session
+$env:WANDB_API_KEY = "..."
+$env:SWANLAB_API_KEY = "..."
+```
+
+You can also use each platform's login command or a secret-management service.
+
+Do not hard-code real API keys or commit them to the repository.
 
 ### Overhead when disabled
 
@@ -151,7 +161,7 @@ class BaseLogger:
 
 **WandbLogger**
 
-```python
+```text
 WandbLogger(
     project: str,              # Project name (required)
     name: str = None,          # Run name
@@ -165,7 +175,7 @@ WandbLogger(
 
 **SwanLabLogger**
 
-```python
+```text
 SwanLabLogger(
     project: str = None,           # Project name
     experiment_name: str = None,   # Experiment name
@@ -178,7 +188,7 @@ SwanLabLogger(
 
 **TensorBoardXLogger**
 
-```python
+```text
 TensorBoardXLogger(
     log_dir: str,          # Log directory (required)
     comment: str = "",     # Suffix for directory name
@@ -189,15 +199,10 @@ TensorBoardXLogger(
 ## Full Example
 
 ```python
-import os
 import torch
 from torch_rechub.models.ranking import DeepFM
 from torch_rechub.trainers import CTRTrainer
 from torch_rechub.basic.tracking import WandbLogger, SwanLabLogger, TensorBoardXLogger
-
-# Set API keys (optional, can also login via CLI)
-os.environ['WANDB_API_KEY'] = "your_key"
-os.environ['SWANLAB_API_KEY'] = "your_key"
 
 # Config
 SEED = 2022

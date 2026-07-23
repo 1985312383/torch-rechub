@@ -5,7 +5,7 @@ description: Torch-RecHub 模型部署指南
 
 # 生产部署导览
 
-Torch-RecHub 提供了完整的生产部署解决方案，支持将训练好的模型部署到生产环境中。
+Torch-RecHub 提供 ONNX 导出、量化和向量索引等部署组件。生产环境仍需自行补齐特征服务、API 服务、监控、灰度与容灾等工程能力。
 
 ## 部署流程概览
 
@@ -25,20 +25,22 @@ Torch-RecHub 提供了完整的生产部署解决方案，支持将训练好的�
 ### 1. ONNX 导出
 
 ```python
-from torch_rechub.trainers import CTRTrainer
+from torch_rechub.trainers import CTRTrainer, MatchTrainer
 
-# 训练完成后导出
-trainer.export_onnx("model.onnx")
+# 排序模型训练完成后导出
+ctr_trainer = CTRTrainer(ctr_model)
+ctr_trainer.export_onnx("model.onnx")
 
 # 双塔模型分别导出
-trainer.export_onnx("user_tower.onnx", mode="user")
-trainer.export_onnx("item_tower.onnx", mode="item")
+match_trainer = MatchTrainer(match_model)
+match_trainer.export_onnx("user_tower.onnx", mode="user")
+match_trainer.export_onnx("item_tower.onnx", mode="item")
 ```
 
 ### 2. 模型量化
 
 ```python
-from torch_rechub.utils import quantize_model
+from torch_rechub.utils.quantization import quantize_model
 
 # INT8 量化（推荐 CPU）
 quantize_model("model_fp32.onnx", "model_int8.onnx", mode="int8")
@@ -49,6 +51,12 @@ quantize_model("model_fp32.onnx", "model_fp16.onnx", mode="fp16")
 
 ### 3. 向量检索
 
+当前 `torch_rechub.serving` 会在导入时加载 Annoy、FAISS 和 Milvus 三个后端；使用统一工厂前请安装全部检索 extra：
+
+```bash
+pip install "torch-rechub[annoy,faiss,milvus]"
+```
+
 ```python
 from torch_rechub.serving import builder_factory
 
@@ -56,7 +64,7 @@ from torch_rechub.serving import builder_factory
 builder = builder_factory("faiss", index_type="HNSW", metric="IP")
 
 with builder.from_embeddings(item_embeddings) as indexer:
-    ids, distances = indexer.query(user_embeddings, top_k=10)
+    ids, scores = indexer.query(user_embeddings, top_k=10)
     indexer.save("item.index")
 ```
 

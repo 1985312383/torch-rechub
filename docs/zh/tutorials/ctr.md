@@ -99,7 +99,7 @@ print(f"Test AUC: {auc:.4f}")
 
 这些模型都使用同一套 `DenseFeature + SparseFeature + DataGenerator + CTRTrainer` 训练范式。
 
-## 二、序列排序链路（DIN / DIEN / BST）
+## 二、序列排序链路（DIN / BST）
 
 序列模型和基础排序模型最大的区别在于：需要额外生成历史行为序列，并且 `history_features` 与 `target_features` 要严格对应。
 
@@ -126,13 +126,14 @@ n_users = data["user_id"].max()
 n_items = data["item_id"].max()
 n_cates = data["cate_id"].max()
 
-# target_features 和 history_features 后面要一一对应做注意力计算
+# features 只放用户画像/上下文；target_features 与 history_features 一一对应
 features = [
-    SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
-    SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
     SparseFeature("user_id", vocab_size=n_users + 1, embed_dim=8),
 ]
-target_features = features
+target_features = [
+    SparseFeature("target_item_id", vocab_size=n_items + 1, embed_dim=8),
+    SparseFeature("target_cate_id", vocab_size=n_cates + 1, embed_dim=8),
+]
 
 history_features = [
     # 序列模型这里必须保留完整序列张量，所以用 concat 而不是 mean / sum
@@ -156,11 +157,11 @@ train_dl, val_dl, test_dl = dg.generate_dataloader(
 )
 ```
 
-### 2. DIN / DIEN / BST 的创建方式
+### 2. DIN / BST 的创建方式
 
 ```python
 import os
-from torch_rechub.models.ranking import DIN, DIEN, BST
+from torch_rechub.models.ranking import DIN, BST
 from torch_rechub.trainers import CTRTrainer
 
 model = DIN(
@@ -170,14 +171,6 @@ model = DIN(
     mlp_params={"dims": [256, 128]},
     attention_mlp_params={"dims": [256, 128]},
 )
-
-# model = DIEN(
-#     features=features,
-#     history_features=history_features,
-#     target_features=target_features,
-#     mlp_params={"dims": [256, 128]},
-#     attention_mlp_params={"dims": [256, 128]},
-# )
 
 # model = BST(
 #     features=features,
@@ -209,7 +202,10 @@ print(f"Test AUC: {auc:.4f}")
 
 - `SequenceFeature` 必须使用 `pooling="concat"`，因为 DIN / DIEN / BST 需要拿到完整序列张量。
 - `history_features` 和 `target_features` 必须一一对应，并通过 `shared_with` 共享 embedding。
+- `features` 是用户画像/上下文特征，不要再把 `target_features` 整体放进去，否则会重复输入；BST 还会因历史与目标维度不等而报错。
 - `BST` 的 `embed_dim` 必须能被 `nhead` 整除。
+
+DIEN 还需要逐时刻负样本序列 `neg_history_features`，且 `CTRTrainer` 要设置 `loss_mode=False`，不能只替换上面的模型类。请直接参考 [DIEN 教程](/zh/tutorials/models/ranking/dien)。
 
 ## 三、评估、导出与可视化
 
