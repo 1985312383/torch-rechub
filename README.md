@@ -391,4 +391,4 @@ If you use this framework in your research or work, please consider citing:
 [![torch-rechub stats](https://mv.datawhale.cc/badges/torch-rechub.png)](https://mv.datawhale.cc/repo-badge?repo=torch-rechub)
 ---
 
-*Last updated: [2026-03-20]*
+*Last updated: [2026-08-03]*
