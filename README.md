@@ -388,8 +388,7 @@ If you use this framework in your research or work, please consider citing:
 
 ## ⭐️ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=datawhalechina/torch-rechub&type=Date)](https://www.star-history.com/#datawhalechina/torch-rechub&Date)
-
+[![torch-rechub stats](https://mv.datawhale.cc/badges/torch-rechub.png)](https://mv.datawhale.cc/repo-badge?repo=torch-rechub)
 ---
 
 *Last updated: [2026-03-20]*
