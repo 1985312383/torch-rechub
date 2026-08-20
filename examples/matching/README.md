@@ -8,7 +8,7 @@
 - 使用随机负采样构造负样本 (sample_method=0)，内含随机负采样、word2vec负采样、流行度负采样、Tencent负采样等多种方法
 - 将每个用户最后一条观看记录设置为测试集
 - 原始数据下载地址：https://grouplens.org/datasets/movielens/1m/
-- 处理完整数据csv下载地址：https://cowtransfer.com/s/5a3ab69ebd314e
+- 处理完整数据csv获取方式：从[官方原始数据](https://grouplens.org/datasets/movielens/1m/)下载后运行 [preprocess_ml.py](./data/ml-1m/preprocess_ml.py) 复现，或使用楼内已验证的备用网盘（见 issue #201）
 
 以下指标使用example中的相同参数在ml-1m上测试得到
 
