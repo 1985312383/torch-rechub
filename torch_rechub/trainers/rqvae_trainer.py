@@ -6,6 +6,18 @@ import torch
 from tqdm import tqdm
 
 
+class _RQVAEONNXWrapper(torch.nn.Module):
+    """Expose the RQ-VAE inference outputs required by ONNX."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x):
+        output, _, indices = self.model(x)
+        return output, indices
+
+
 class Trainer(object):
     """Training utility class for PyTorch models.
 
@@ -250,7 +262,8 @@ class Trainer(object):
         dynamic_batch : bool, optional
             Whether to enable dynamic batch size.
         device : torch.device or str, optional
-            Device to run the export (cpu or cuda). Default: model device.
+            Device to run the export (cpu or cuda). Defaults to CPU for
+            maximum compatibility.
         verbose : bool, optional
             Whether to print ONNX export debug info.
         onnx_export_kwargs : dict, optional
@@ -264,25 +277,32 @@ class Trainer(object):
         Example
         -------
         >>> model = RQVAEModel(in_dim=768, num_emb_list=[64,64], e_dim=64)
-        >>> model.train()  # assume model has been trained
+        >>> trainer = Trainer(model)
+        >>> trainer.fit(train_dataloader)  # assume the model has been trained
         >>> output_path = "rqevae.onnx"
-        >>> success = model.export_onnx(output_path, batch_size=4, opset_version=14)
+        >>> success = trainer.export_onnx(output_path, batch_size=4, opset_version=14)
         >>> print(success)
         True
 
         >>> # Export on specific device
-        >>> success = model.export_onnx("rqevae_cpu.onnx", batch_size=4, device="cpu")
+        >>> success = trainer.export_onnx("rqevae_cpu.onnx", batch_size=4, device="cpu")
         >>> print(success)
         True
         """
+        # Follow the other trainers: export the wrapped model rather than the
+        # trainer object, unwrap DataParallel, and default to CPU.
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        export_device = torch.device(device if device is not None else 'cpu')
+        original_device = next(model.parameters()).device
+        original_training = model.training
+
         try:
-            if device is None:
-                device = next(self.parameters()).device
-            self.to(device)
-            self.eval()
+            model.to(export_device)
+            model.eval()
+            wrapper = _RQVAEONNXWrapper(model).to(export_device)
 
             # Dummy input
-            dummy_input = torch.randn(batch_size, self.in_dim, device=device)
+            dummy_input = torch.randn(batch_size, model.in_dim, device=export_device)
 
             # Dynamic axes
             dynamic_axes_dict = None
@@ -291,9 +311,6 @@ class Trainer(object):
 
             # Export kwargs
             export_kwargs = dict(
-                model=self,
-                args=(dummy_input,
-                      ),
                 f=output_path,
                 export_params=True,
                 opset_version=opset_version,
@@ -305,16 +322,36 @@ class Trainer(object):
                 verbose=verbose,
             )
             if onnx_export_kwargs:
+                overlap = set(export_kwargs) & set(onnx_export_kwargs)
+                overlap.discard('dynamo')
+                if overlap:
+                    raise ValueError(
+                        "onnx_export_kwargs contains keys that overlap with explicit args: "
+                        f"{sorted(overlap)}. Please set them via export_onnx() parameters instead."
+                    )
                 export_kwargs.update(onnx_export_kwargs)
 
-            # Wrapper forward
-            def forward_for_export(x):
-                out, _, indices = self.forward(x)
-                return out, indices
+            # Prefer the legacy exporter for dynamic axes. On newer PyTorch
+            # versions, use the dynamo exporter when shapes are static.
+            import inspect
 
-            torch.onnx.export(forward_for_export, dummy_input, output_path, **export_kwargs)
+            export_signature = inspect.signature(torch.onnx.export)
+            if 'dynamo' in export_signature.parameters:
+                export_kwargs.setdefault('dynamo', False if dynamic_axes_dict is not None else True)
+            else:
+                export_kwargs.pop('dynamo', None)
+
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+
+            with torch.no_grad():
+                torch.onnx.export(wrapper, (dummy_input,), **export_kwargs)
             print(f"ONNX model with output and indices exported to {output_path}")
             return True
         except Exception as e:
             print(f"Failed to export ONNX model: {e}")
             return False
+        finally:
+            model.to(original_device)
+            model.train(original_training)
