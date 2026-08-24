@@ -392,8 +392,8 @@ ctr_trainer.visualization(save_path="model.pdf", dpi=300)  # 保存为高清 PDF
 
 ## ⭐️ 项目 star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=datawhalechina/torch-rechub&type=Date)](https://www.star-history.com/#datawhalechina/torch-rechub&Date)
+[![torch-rechub stats](https://mv.datawhale.cc/badges/torch-rechub.png)](https://mv.datawhale.cc/repo-badge?repo=torch-rechub)
 
 ---
 
-*最后更新: [2026-03-20]*
+*最后更新: [2026-08-03]*
