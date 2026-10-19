@@ -145,7 +145,7 @@ from torch_rechub.models.matching import DSSM
 model = DSSM(
     user_features=user_features,
     item_features=item_features,
-    temperature=1.0,  # The current DSSM implementation retains this parameter, but forward does not use it yet
+    temperature=1.0,  # Used by full-batch in-batch training, not point-wise BCE
     user_params={
         "dims": [256, 128, 64],
         "activation": "prelu"      # PReLU usually works better here
@@ -163,12 +163,12 @@ model = DSSM(
 |-----------|------|-------------|-----------------|
 | `user_features` | `list[Feature]` | User-side feature list | User attributes + behavior sequence |
 | `item_features` | `list[Feature]` | Item-side feature list | Item ID + attributes |
-| `temperature` | `float` | Retained parameter; the current DSSM `forward` does not apply it to the scores | 1.0 |
+| `temperature` | `float` | Finite positive temperature for full-batch in-batch cross entropy; does not affect point-wise BCE | Default 1.0; example 0.02 |
 | `user_params.dims` | `list[int]` | User Tower MLP dimensions | `[256, 128, 64]` |
 | `item_params.dims` | `list[int]` | Item Tower MLP dimensions | `[256, 128, 64]` |
 | `*_params.activation` | `str` | Activation function | `"prelu"` recommended |
 
-> Do not expect changing `temperature` to affect the current DSSM results: the temperature-scaling line in the source code is not enabled yet.
+> The default full-batch in-batch path in `MatchTrainer` uses `temperature`. The point-wise DSSM `forward` still returns the sigmoid of unscaled cosine similarity.
 
 ---
 
@@ -208,6 +208,37 @@ trainer.fit(train_dl)
 | 2 | List-wise | Softmax Loss | Requires the model to return `[B, 1+n_neg]` logits, as `YoutubeDNN` / `MIND` do |
 
 `mode` defines the trainer's loss contract; it cannot be switched arbitrarily for the same DSSM instance. The scalar probability output of the DSSM on this page requires `mode=0`.
+
+### 4.3 Single-Device In-Batch Training
+
+Run from `examples/matching`:
+
+```bash
+python run_ml_dssm.py --in_batch_neg --batch_size 256 --temperature 0.02 --device cpu
+```
+
+Use `--device cuda:0` for one GPU. The example generates positive interactions with `neg_ratio=0` and uses a separate data cache. Without `--in_batch_neg`, it keeps the original offline negatives and BCE training.
+
+The other MovieLens retrieval examples also support `--in_batch_neg`. Existing code usually needs two changes:
+
+```python
+df_train, df_test = generate_seq_feature_match(data, user_col, item_col, "timestamp", in_batch_neg=True)
+trainer = MatchTrainer(model, in_batch_neg=True)
+```
+
+The data helper produces positive pairs. Existing model parameters, training modes, and inference interfaces keep their original form. The default model `forward()` still returns its original scores; the trainer temporarily switches the existing `model.mode` during the in-batch forward and restores it afterwards. No embedding-output switch or prediction-code migration is required.
+
+All public matching models support this entry point. MIND/ComiRec retain positive-item-based interest selection; YoutubeSBC retains sampling-bias correction. NARM/STAMP can use their existing next-item ID labels directly: enable `run_sbr.py --in_batch_neg`. Custom session histories use post-padding, and `y` must contain actual next-item IDs unless an explicit `item_feature` and corresponding item column are supplied. SASRec retains its original per-position positive/negative training; in-batch training uses the positive item at the last valid sequence position.
+
+Normalization follows each model's original scoring: DSSM/YoutubeDNN use normalized vectors, YoutubeSBC uses cosine scores, and NARM/STAMP/SINE retain dot products. The trainer does not impose a shared embedding scale, keeping training aligned with the existing retrieval evaluation.
+
+This in-batch entry point currently supports a single device (`cpu` or one CUDA GPU). Multi-GPU support is maintained separately.
+
+For paired data, each row must be a positive user-item interaction without offline negative rows. DSSM's towers provide normalized embeddings; `MatchTrainer(model, in_batch_neg=True)` computes `user_emb @ item_emb.T / model.temperature` and applies cross entropy with diagonal targets `arange(B)`. Training labels `y` are placeholders for explicit user-item pairs; next-item labels for session models supply the actual target item IDs. Explicit random/hard sampling and BPR configurations retain their existing paths.
+
+This simple version treats all off-diagonal entries as negatives without duplicate-item masking. It adds no sampling-probability correction beyond YoutubeSBC's own correction. Repeated items can therefore become false negatives. Use `batch_size >= 2`; singleton batches are skipped with a warning, and an epoch with no usable batches raises an error.
+
+Evaluate retrieval using the embeddings as shown below. A positive-only training dataset is not an AUC validation dataset: AUC validation through `fit(..., val_dataloader=...)` still requires genuine binary labels.
 
 ---
 
@@ -500,7 +531,7 @@ The key is to **decouple users and items**:
 
 ### Q4: Does `temperature` affect the current DSSM implementation?
 
-No. The constructor parameter is retained, but the current `DSSM.forward()` does not perform temperature scaling.
+Default full-batch in-batch training uses it to scale logits. Point-wise BCE is unchanged: `DSSM.forward()` still does not perform temperature scaling.
 
 ### Q5: How should I choose among Annoy, Faiss, and Milvus?
 
