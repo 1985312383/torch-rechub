@@ -101,7 +101,7 @@ def negative_sample(items_cnt_order, ratio, method_id=0):
     return neg_items
 
 
-def inbatch_negative_sampling(scores, neg_ratio=None, hard_negative=False, generator=None):
+def inbatch_negative_sampling(scores, neg_ratio=None, hard_negative=False, generator=None, item_ids=None):
     """Generate in-batch negative indices from a similarity matrix.
 
     This mirrors the offline ``negative_sample`` API by only returning sampled
@@ -114,33 +114,41 @@ def inbatch_negative_sampling(scores, neg_ratio=None, hard_negative=False, gener
         hard_negative (bool, optional): whether to pick top-k highest scores as negatives
             instead of uniform random sampling. Defaults to False.
         generator (torch.Generator, optional): generator to control randomness for tests/reproducibility.
+        item_ids (torch.Tensor, optional): one item ID per row. Exclude the same
+            item as well as the same row; cap the count to the smallest pool.
 
     Returns:
         torch.Tensor: sampled negative indices with shape (batch_size, neg_ratio).
+            An all-same-item batch returns an empty (batch_size, 0) tensor.
     """
-    if scores.dim() != 2:  # must be batch_size x batch_size
-        raise ValueError(f"inbatch_negative_sampling expects 2D scores, got shape {tuple(scores.shape)}")
+    if scores.dim() != 2 or scores.size(0) != scores.size(1):
+        raise ValueError(f"inbatch_negative_sampling expects square [B, B] scores, got shape {tuple(scores.shape)}")
     batch_size = scores.size(0)
     if batch_size <= 1:
         raise ValueError("In-batch negative sampling requires batch_size > 1")
 
-    max_neg = batch_size - 1  # each col can provide at most batch_size-1 negatives
+    device = scores.device
+    valid = ~torch.eye(batch_size, dtype=torch.bool, device=device)
+    if item_ids is not None:
+        if item_ids.dim() not in (1, 2) or item_ids.numel() != batch_size:
+            raise ValueError("item_ids must contain one item ID per batch row.")
+        if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
+            raise ValueError("Item IDs must be finite.")
+        item_ids = item_ids.to(device).reshape(batch_size)
+        valid &= item_ids[:, None] != item_ids[None, :]
+    max_neg = int(valid.sum(dim=1).min())
     if neg_ratio is None or neg_ratio <= 0 or neg_ratio > max_neg:
         neg_ratio = max_neg
 
-    device = scores.device
-    index_range = torch.arange(batch_size, device=device)
     neg_indices = torch.empty((batch_size, neg_ratio), dtype=torch.long, device=device)
 
     # for each sample, pick neg_ratio negatives
     for i in range(batch_size):
+        candidates = valid[i].nonzero(as_tuple=True)[0]
         if hard_negative:
-            row_scores = scores[i].clone()
-            row_scores[i] = float("-inf")  # mask positive
-            topk = torch.topk(row_scores, k=neg_ratio).indices
-            neg_indices[i] = topk
+            topk = torch.topk(scores[i, candidates], k=neg_ratio).indices
+            neg_indices[i] = candidates[topk]
         else:
-            candidates = torch.cat([index_range[:i], index_range[i + 1:]])  # all except i
             perm = torch.randperm(candidates.size(0), device=device, generator=generator)  # random negative sampling
             neg_indices[i] = candidates[perm[:neg_ratio]]
 

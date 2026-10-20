@@ -8,6 +8,7 @@ from sklearn.metrics import roc_auc_score
 
 from ..basic.callback import EarlyStopper
 from ..basic.loss_func import BPRLoss, RegularizationLoss
+from ..models.matching import SASRec
 from ..utils.match import gather_inbatch_logits, inbatch_negative_sampling
 
 
@@ -33,10 +34,12 @@ class MatchTrainer(object):
             model.temperature (default=1.0).
             Paired-data labels are placeholders; session next-item labels provide target IDs.
             Validation AUC still requires binary labels.
-            Other rows are treated as negatives, including repeated item IDs.
+            Other rows with a different item ID are treated as negatives.
         in_batch_neg_ratio (int): number of negatives to draw from the batch per positive sample when in_batch_neg is True.
         hard_negative (bool): whether to choose hardest negatives within batch (top-k by score) instead of uniform random.
         sampler_seed (int): optional random seed for in-batch sampler to ease reproducibility/testing.
+        item_id_feature (str): positive item ID column, default="item_id".
+            Specify another column name explicitly; session labels use "target".
     """
 
     def __init__(
@@ -58,6 +61,7 @@ class MatchTrainer(object):
         gpus=None,
         model_path="./",
         model_logger=None,
+        item_id_feature="item_id",
     ):
         self.model = model
         if gpus is None:
@@ -78,6 +82,9 @@ class MatchTrainer(object):
         self.device = torch.device(device)
         self.model.to(self.device)
         self.in_batch_neg = in_batch_neg
+        self.item_id_feature = getattr(item_id_feature, 'name', item_id_feature)
+        if in_batch_neg and (not isinstance(self.item_id_feature, str) or not self.item_id_feature):
+            raise ValueError("item_id_feature must name the positive item ID column.")
         self.in_batch_neg_ratio = in_batch_neg_ratio
         self.hard_negative = hard_negative
         self._sampler_generator = None
@@ -128,7 +135,12 @@ class MatchTrainer(object):
             if self.in_batch_neg:
                 # Session models can use their existing next-item labels as targets.
                 x_dict.setdefault('target', y.long())
-                loss = self._inbatch_loss(x_dict)
+                item_ids = self._inbatch_item_ids(x_dict)
+                if not (item_ids != item_ids[0]).any():
+                    # No distinct item can be a negative; do not update tower BatchNorm.
+                    skipped_batches += 1
+                    continue
+                loss = self._inbatch_loss(x_dict, item_ids)
             else:
                 y = y.float() if self.mode == 0 else y.long()
                 if self.mode == 1:  # pair_wise
@@ -169,9 +181,9 @@ class MatchTrainer(object):
                 total_loss = 0
 
         if self.in_batch_neg and batch_count == 0:
-            raise ValueError("No usable in-batch training batches. Use batch_size >= 2 and provide at least two positive pairs.")
+            raise ValueError("No usable in-batch training batches. Provide positive pairs with at least two different item IDs per batch.")
         if skipped_batches:
-            warnings.warn(f"Skipped {skipped_batches} in-batch training batch(es) with fewer than two samples.", RuntimeWarning, stacklevel=2)
+            warnings.warn(f"Skipped {skipped_batches} in-batch training batch(es) without two different item IDs.", RuntimeWarning, stacklevel=2)
         # Return average epoch loss
         return epoch_loss / batch_count if batch_count > 0 else 0
 
@@ -368,8 +380,44 @@ class MatchTrainer(object):
             **kwargs
         )
 
-    def _inbatch_loss(self, x_dict):
+    def _inbatch_item_ids(self, x_dict):
+        """Read the same positive item IDs as the model's item tower."""
+        name = self.item_id_feature
+        model = self.model
+        if name == 'item_id' and name not in x_dict:
+            # Existing session models already define their target, unlike item attributes.
+            feature = getattr(model, 'item_feature', None)
+            if feature is not None:
+                name = feature.name
+            elif isinstance(model, SASRec):
+                name = model.features[1].name
+            elif hasattr(model, 'item_history_feature'):
+                name = 'target'
+            else:
+                features = getattr(model, 'item_features', None) or getattr(model, 'pos_item_features', [])
+                names = {getattr(feature, 'name', feature) for feature in features}
+                aliases = [column for column in ('movie_id', 'target_item_id') if column in names and column in x_dict]
+                if len(aliases) == 1:
+                    name = aliases[0]
+        if name not in x_dict:
+            raise ValueError(f"Missing item ID column: {name}. Set item_id_feature to the positive item ID column in your data.")
+        item_ids = x_dict[name]
+        if isinstance(model, SASRec) and model.item_feature is None and name == model.features[1].name and item_ids.dim() == 2:
+            # SASRec's item tower selects the positive at the last valid history position.
+            seq = x_dict[model.features[0].name]
+            positions = torch.arange(seq.size(1), device=seq.device).expand_as(seq)
+            last = positions.masked_fill(seq == 0, -1).max(dim=1).values.clamp(min=0)
+            item_ids = item_ids.gather(1, last.unsqueeze(1))
+        if item_ids.dim() not in (1, 2) or (item_ids.dim() == 2 and item_ids.size(1) != 1):
+            raise ValueError("item_id_feature must contain one item ID per row.")
+        if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
+            raise ValueError("Item IDs must be finite.")
+        return item_ids.reshape(-1)
+
+    def _inbatch_loss(self, x_dict, item_ids=None):
         """Get tower embeddings, choose batch negatives, and apply the configured loss."""
+        if item_ids is None:
+            item_ids = self._inbatch_item_ids(x_dict)
         model = self.model
         original_mode = model.mode
         model.mode = 'in_batch'
@@ -394,9 +442,14 @@ class MatchTrainer(object):
         logits = scores / self._temperature
         if self._full_inbatch:
             # Each row's positive item is on the diagonal of the full [B, B] matrix.
+            same_item = item_ids[:, None] == item_ids[None, :]
+            same_item.fill_diagonal_(False)
+            logits = logits.masked_fill(same_item, float('-inf'))
             targets = torch.arange(logits.size(0), device=logits.device)
         else:
-            neg_indices = inbatch_negative_sampling(scores, neg_ratio=self.in_batch_neg_ratio, hard_negative=self.hard_negative, generator=self._sampler_generator)
+            neg_indices = inbatch_negative_sampling(scores, neg_ratio=self.in_batch_neg_ratio, hard_negative=self.hard_negative, generator=self._sampler_generator, item_ids=item_ids)
+            if neg_indices.size(1) == 0:
+                raise ValueError("In-batch training requires at least two different item IDs.")
             logits = gather_inbatch_logits(logits, neg_indices)
             if self.mode == 1:
                 return self.criterion(logits[:, 0], logits[:, 1:], in_batch_neg=True)

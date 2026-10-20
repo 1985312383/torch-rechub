@@ -236,7 +236,9 @@ trainer = MatchTrainer(model, in_batch_neg=True)
 
 自己准备配对数据时，每行必须是一个真实的用户—物品正交互，不能混入离线负样本。调用 `MatchTrainer(model, in_batch_neg=True)` 即可使用默认全 batch 路径：DSSM 两塔提供归一化向量，Trainer 计算 `user_emb @ item_emb.T / model.temperature`，再以对角线位置 `arange(B)` 为标签计算交叉熵。显式用户—物品配对的训练 `y` 仅作占位，不决定正负；会话模型的下一物品标签则作为目标物品 ID。已有随机/困难负采样或 BPR 的显式配置保留原路径。
 
-该简单版本把所有非对角线位置当作负样本，不屏蔽重复物品；除 YoutubeSBC 本身的修正外，不额外引入采样概率修正。同 batch 出现相同物品时可能产生假负例。`batch_size` 至少为 2，只有一条样本的尾批会跳过并提示；整个 epoch 都没有有效 batch 时会报错。
+同物品的非对角线位置会被屏蔽，对角线仍是正例；随机/困难负采样和 BPR 也只使用不同物品。显式采样数量按各行可用负例的最小数量裁剪，保持原来的矩形输出。身份参数默认 `item_id_feature="item_id"`，一般无需传递，也不再按第一个物品属性猜测。已有 MovieLens 和会话示例的身份列在 Trainer 内兼容，调用保持不变；自定义双塔只要提供默认 ID 列即可，不要求额外的 Feature 元信息。一般每行一个 ID（`[B]` 或 `[B,1]`），SASRec 自动取最后有效位置的正物品，不比较向量，也不自动过滤 ID 0。
+
+`batch_size` 至少为 2；单样本尾批或全 batch 同物品会在模型前向前跳过并提示，整个 epoch 都没有有效 batch 时会报错。这里只排除同物品，不过滤用户的全部已点击历史；除 YoutubeSBC 本身的修正外，不额外引入采样概率修正。
 
 训练后沿用下一节的向量召回评估。正样本训练集不能直接作为 AUC 验证集；`fit(..., val_dataloader=...)` 的 AUC 验证仍需要真实的 0/1 标签。
 

@@ -33,8 +33,10 @@ class CTRTrainer(object):
             Defaults to False, preserving the original supervised BCE training.
         item_features (list): item column names or Feature objects to swap together.
             User, history and context columns remain attached to their original row.
-        in_batch_neg_ratio (int): negatives per positive, default=1. None uses all other rows.
+        in_batch_neg_ratio (int): negatives per positive, default=1. None uses all different-item rows.
         sampler_seed (int): optional seed for reproducible in-batch sampling.
+        item_id_feature (str): item ID column used to exclude same-item negatives.
+            Defaults to "item_id"; specify the column name if your data uses another name.
     """
 
     def __init__(
@@ -56,16 +58,25 @@ class CTRTrainer(object):
         item_features=None,
         in_batch_neg_ratio=1,
         sampler_seed=None,
+        item_id_feature="item_id",
     ):
         self.in_batch_neg = in_batch_neg
         if isinstance(item_features, str):
             item_features = [item_features]
         self.item_features = [getattr(feature, 'name', feature) for feature in item_features or []]
+        self.item_id_feature = getattr(item_id_feature, 'name', item_id_feature)
         if in_batch_neg:
             if not self.item_features or any(not isinstance(name, str) or not name for name in self.item_features):
                 raise ValueError("Provide item_features, e.g. ['item_id', 'cate_id'], for in-batch ranking.")
             if len(set(self.item_features)) != len(self.item_features):
                 raise ValueError("item_features must not contain duplicate column names.")
+            if self.item_id_feature == 'item_id' and self.item_id_feature not in self.item_features:
+                # Keep existing MovieLens/Amazon examples without changing their calls.
+                aliases = [name for name in ('movie_id', 'target_item_id') if name in self.item_features]
+                if len(aliases) == 1:
+                    self.item_id_feature = aliases[0]
+            if self.item_id_feature not in self.item_features:
+                raise ValueError("item_id_feature must name the item ID column included in item_features.")
             if in_batch_neg_ratio is not None and (not isinstance(in_batch_neg_ratio, int) or isinstance(in_batch_neg_ratio, bool) or in_batch_neg_ratio < 1):
                 raise ValueError("in_batch_neg_ratio must be a positive integer or None.")
         self.in_batch_neg_ratio = in_batch_neg_ratio
@@ -113,19 +124,30 @@ class CTRTrainer(object):
         batch_size = int(positive.sum())
         if batch_size < 2:
             return None
+        item_ids = x_dict[self.item_id_feature]
+        if item_ids.dim() not in (1, 2) or item_ids.numel() != batch_size:
+            raise ValueError("item_id_feature must contain one item ID per row.")
+        if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
+            raise ValueError("Item IDs must be finite.")
+        item_ids = item_ids.reshape(batch_size)
+        valid = item_ids[:, None] != item_ids[None, :]
+        if not valid.any():
+            return None
         rows = torch.arange(batch_size, device=y.device)
         if self.in_batch_neg_ratio is None:
-            offsets = torch.arange(1, batch_size, device=y.device).expand(batch_size, -1)
+            owners, item_rows = valid.nonzero(as_tuple=True)
         else:
-            offsets = torch.randint(1, batch_size, (batch_size, self.in_batch_neg_ratio), device=y.device, generator=self._sampler_generator)
-        donors = (rows.unsqueeze(1) + offsets) % batch_size
-        donors = torch.cat([rows.unsqueeze(1), donors], dim=1)
-        owners = rows.repeat_interleave(donors.size(1))
-        item_rows = donors.reshape(-1)
+            # Sampling with replacement keeps the requested ratio even for small pools.
+            item_rows = torch.multinomial(valid.float(), self.in_batch_neg_ratio, replacement=True, generator=self._sampler_generator).reshape(-1)
+            owners = rows.repeat_interleave(self.in_batch_neg_ratio)
+        labels = torch.cat([torch.ones(batch_size, device=y.device), torch.zeros_like(owners, dtype=torch.float32)])
+        owners = torch.cat([rows, owners])
+        item_rows = torch.cat([rows, item_rows])
+        # Keep each positive followed by its negatives, as in the original batches.
+        order = owners.argsort(stable=True)
+        owners, item_rows, labels = owners[order], item_rows[order], labels[order]
         paired = {name: values[item_rows if name in self.item_features else owners] for name, values in x_dict.items()}
-        labels = torch.zeros_like(donors, dtype=torch.float32)
-        labels[:, 0] = 1
-        return paired, labels.reshape(-1)
+        return paired, labels
 
     def train_one_epoch(self, data_loader, log_interval=10):
         self.model.train()
@@ -167,9 +189,9 @@ class CTRTrainer(object):
                 total_loss = 0
 
         if self.in_batch_neg and batch_count == 0:
-            raise ValueError("No usable in-batch ranking batches. Provide at least two positive rows per batch.")
+            raise ValueError("No usable in-batch ranking batches. Provide positive rows with at least two different item IDs per batch.")
         if skipped_batches:
-            warnings.warn(f"Skipped {skipped_batches} batch(es) with fewer than two positive interactions.", RuntimeWarning, stacklevel=2)
+            warnings.warn(f"Skipped {skipped_batches} batch(es) without positive interactions for two different items.", RuntimeWarning, stacklevel=2)
         # Return average epoch loss
         return epoch_loss / batch_count if batch_count > 0 else 0
 
