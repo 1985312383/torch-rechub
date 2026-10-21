@@ -83,8 +83,6 @@ class MatchTrainer(object):
         self.model.to(self.device)
         self.in_batch_neg = in_batch_neg
         self.item_id_feature = item_id_feature
-        if in_batch_neg and (not isinstance(self.item_id_feature, str) or not self.item_id_feature):
-            raise ValueError("item_id_feature must name the positive item ID column.")
         self.in_batch_neg_ratio = in_batch_neg_ratio
         self.hard_negative = hard_negative
         self._sampler_generator = None
@@ -125,22 +123,15 @@ class MatchTrainer(object):
         skipped_batches = 0
         tk0 = tqdm.tqdm(data_loader, desc="train", smoothing=0, mininterval=1.0)
         for i, (x_dict, y) in enumerate(tk0):
-            if self.in_batch_neg and y.size(0) < 2:
-                # Skip before running the towers: a singleton has no negatives
-                # and may also fail in training-mode BatchNorm.
-                skipped_batches += 1
-                continue
             x_dict = {k: v.to(self.device) for k, v in x_dict.items()}  # tensor to GPU
             y = y.to(self.device)
             if self.in_batch_neg:
                 # Session models can use their existing next-item labels as targets.
                 x_dict.setdefault('target', y.long())
-                item_ids = self._inbatch_item_ids(x_dict)
-                if not (item_ids != item_ids[0]).any():
-                    # No distinct item can be a negative; do not update tower BatchNorm.
+                loss = self._inbatch_loss(x_dict)
+                if loss is None:
                     skipped_batches += 1
                     continue
-                loss = self._inbatch_loss(x_dict, item_ids)
             else:
                 y = y.float() if self.mode == 0 else y.long()
                 if self.mode == 1:  # pair_wise
@@ -380,17 +371,17 @@ class MatchTrainer(object):
             **kwargs
         )
 
-    def _inbatch_item_ids(self, x_dict):
-        """Read the configured positive item ID column without inferring names."""
+    def _inbatch_loss(self, x_dict):
+        """Compute the batch loss; return None when no different-item negatives exist."""
         item_ids = x_dict[self.item_id_feature]
         if item_ids.dim() not in (1, 2) or (item_ids.dim() == 2 and item_ids.size(1) != 1):
             raise ValueError("item_id_feature must contain one item ID per row.")
         if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
             raise ValueError("Item IDs must be finite.")
-        return item_ids.reshape(-1)
-
-    def _inbatch_loss(self, x_dict, item_ids):
-        """Get tower embeddings, choose batch negatives, and apply the configured loss."""
+        item_ids = item_ids.reshape(-1)
+        # Skip before forward so singleton/same-item batches do not update BatchNorm.
+        if item_ids.numel() < 2 or not (item_ids != item_ids[0]).any():
+            return None
         model = self.model
         original_mode = model.mode
         model.mode = 'in_batch'

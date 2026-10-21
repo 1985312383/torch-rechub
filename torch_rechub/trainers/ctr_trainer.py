@@ -134,12 +134,11 @@ class CTRTrainer(object):
         else:
             # Equal IDs form one block in sorted order. Draw outside that block,
             # e.g. [7, 7, 8, 9]: item 7 draws from the two rows after its block.
-            _, groups, counts = torch.unique(item_ids, return_inverse=True, return_counts=True)
-            item_order = item_ids.argsort()
-            group_sizes = counts[groups, None]
-            group_starts = (counts.cumsum(0) - counts)[groups, None]
-            sampled = (torch.rand((batch_size, self.in_batch_neg_ratio), device=y.device, generator=self._sampler_generator) * (batch_size - group_sizes)).long()
-            donors = item_order[sampled + (sampled >= group_starts) * group_sizes]
+            sorted_ids, item_order = item_ids.sort()
+            start = torch.searchsorted(sorted_ids, item_ids)[:, None]
+            count = torch.searchsorted(sorted_ids, item_ids, right=True)[:, None] - start
+            sampled = (torch.rand((batch_size, self.in_batch_neg_ratio), device=y.device, generator=self._sampler_generator) * (batch_size - count)).long()
+            donors = item_order[sampled + (sampled >= start) * count]
             donors = torch.cat([rows[:, None], donors], dim=1)
         # Keep the positive first; remove same-item negatives in full-batch mode.
         valid = (donors == rows[:, None]) | (item_ids[donors] != item_ids[:, None])
