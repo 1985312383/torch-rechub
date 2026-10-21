@@ -8,7 +8,6 @@ from sklearn.metrics import roc_auc_score
 
 from ..basic.callback import EarlyStopper
 from ..basic.loss_func import BPRLoss, RegularizationLoss
-from ..models.matching import SASRec
 from ..utils.match import gather_inbatch_logits, inbatch_negative_sampling
 
 
@@ -389,8 +388,6 @@ class MatchTrainer(object):
             feature = getattr(model, 'item_feature', None)
             if feature is not None:
                 name = feature.name
-            elif isinstance(model, SASRec):
-                name = model.features[1].name
             elif hasattr(model, 'item_history_feature'):
                 name = 'target'
             else:
@@ -399,25 +396,21 @@ class MatchTrainer(object):
                 aliases = [column for column in ('movie_id', 'target_item_id') if column in names and column in x_dict]
                 if len(aliases) == 1:
                     name = aliases[0]
-        if name not in x_dict:
-            raise ValueError(f"Missing item ID column: {name}. Set item_id_feature to the positive item ID column in your data.")
-        item_ids = x_dict[name]
-        if isinstance(model, SASRec) and model.item_feature is None and name == model.features[1].name and item_ids.dim() == 2:
-            # SASRec's item tower selects the positive at the last valid history position.
-            seq = x_dict[model.features[0].name]
-            positions = torch.arange(seq.size(1), device=seq.device).expand_as(seq)
-            last = positions.masked_fill(seq == 0, -1).max(dim=1).values.clamp(min=0)
-            item_ids = item_ids.gather(1, last.unsqueeze(1))
+        if self.item_id_feature == 'item_id' and hasattr(model, 'get_item_ids'):
+            # Sequence models own the choice of the positive timestep.
+            item_ids = model.get_item_ids(x_dict)
+        else:
+            if name not in x_dict:
+                raise ValueError(f"Missing item ID column: {name}. Set item_id_feature to the positive item ID column in your data.")
+            item_ids = x_dict[name]
         if item_ids.dim() not in (1, 2) or (item_ids.dim() == 2 and item_ids.size(1) != 1):
             raise ValueError("item_id_feature must contain one item ID per row.")
         if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
             raise ValueError("Item IDs must be finite.")
         return item_ids.reshape(-1)
 
-    def _inbatch_loss(self, x_dict, item_ids=None):
+    def _inbatch_loss(self, x_dict, item_ids):
         """Get tower embeddings, choose batch negatives, and apply the configured loss."""
-        if item_ids is None:
-            item_ids = self._inbatch_item_ids(x_dict)
         model = self.model
         original_mode = model.mode
         model.mode = 'in_batch'
@@ -448,8 +441,6 @@ class MatchTrainer(object):
             targets = torch.arange(logits.size(0), device=logits.device)
         else:
             neg_indices = inbatch_negative_sampling(scores, neg_ratio=self.in_batch_neg_ratio, hard_negative=self.hard_negative, generator=self._sampler_generator, item_ids=item_ids)
-            if neg_indices.size(1) == 0:
-                raise ValueError("In-batch training requires at least two different item IDs.")
             logits = gather_inbatch_logits(logits, neg_indices)
             if self.mode == 1:
                 return self.criterion(logits[:, 0], logits[:, 1:], in_batch_neg=True)

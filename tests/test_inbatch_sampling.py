@@ -175,10 +175,11 @@ def test_sampled_inbatch_with_repeated_items_has_finite_gradients(mode, hard_neg
     assert all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
 
 
-@pytest.mark.parametrize("ratio", [1, None])
-def test_ranking_inbatch_excludes_same_item_and_keeps_fields_together(ratio):
+@pytest.mark.parametrize("ratio", [1, 3, None])
+@pytest.mark.parametrize("item_ids", [[7, 7, 8, 9], [7, 7, 7, 8]])
+def test_ranking_inbatch_excludes_same_item_and_keeps_fields_together(ratio, item_ids):
     trainer = CTRTrainer(torch.nn.Linear(1, 1), in_batch_neg=True, item_features=['cate', 'item'], item_id_feature='item', in_batch_neg_ratio=ratio, sampler_seed=2)
-    x = {'user': torch.tensor([0, 1, 2, 3]), 'item': torch.tensor([7, 7, 8, 9]), 'cate': torch.tensor([70, 70, 80, 90]), 'history': torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]])}
+    x = {'user': torch.arange(4), 'item': torch.tensor(item_ids), 'cate': torch.tensor(item_ids) * 10, 'history': torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]])}
     paired, labels = trainer._inbatch_data(x, torch.ones(4))
     owners = paired['user']
     negative = labels == 0
@@ -186,7 +187,17 @@ def test_ranking_inbatch_excludes_same_item_and_keeps_fields_together(ratio):
     assert torch.equal(paired['cate'], paired['item'] * 10)
     assert torch.equal(paired['history'], x['history'][owners])
     assert int((labels == 1).sum()) == 4
-    assert len(labels) == (8 if ratio == 1 else 14)
+    negatives = int((x['item'][:, None] != x['item'][None, :]).sum()) if ratio is None else 4 * ratio
+    assert len(labels) == 4 + negatives
+    for owner in range(4):
+        row_labels = labels[owners == owner]
+        assert row_labels[0] == 1
+        assert (row_labels[1:] == 0).all()
+    if ratio is not None:
+        trainer._sampler_generator.manual_seed(2)
+        repeated, repeated_labels = trainer._inbatch_data(x, torch.ones(4))
+        assert torch.equal(paired['item'], repeated['item'])
+        assert torch.equal(labels, repeated_labels)
     x['item'][:] = 7
     assert trainer._inbatch_data(x, torch.ones(4)) is None
 
@@ -253,8 +264,12 @@ def test_sasrec_default_positive_sequence_ids():
     features = [SequenceFeature(name, 16, 4, pooling='concat') for name in ('seq', 'pos', 'neg')]
     model = SASRec(features, max_len=3, dropout_rate=0, num_blocks=1, num_heads=1)
     trainer = MatchTrainer(model, in_batch_neg=True)
-    x = {'seq': torch.tensor([[0, 1, 2], [3, 4, 0]]), 'pos': torch.tensor([[0, 2, 7], [4, 8, 0]])}
+    x = {'seq': torch.tensor([[0, 1, 2], [3, 4, 0]]), 'pos': torch.tensor([[0, 2, 7], [4, 8, 0]]), 'item_id': torch.tensor([1, 1])}
+    # The sequence model's actual positives win over an unrelated item_id column.
     assert torch.equal(trainer._inbatch_item_ids(x), torch.tensor([7, 8]))
+    model.mode = 'in_batch'
+    torch.testing.assert_close(model.item_tower(x).squeeze(1), model.item_emb.embed_dict['seq'](model.get_item_ids(x)))
+    model.mode = None
     assert np.isfinite(trainer.train_one_epoch([(x, torch.zeros(2))]))
 
 

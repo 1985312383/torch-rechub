@@ -125,27 +125,32 @@ class CTRTrainer(object):
         if batch_size < 2:
             return None
         item_ids = x_dict[self.item_id_feature]
-        if item_ids.dim() not in (1, 2) or item_ids.numel() != batch_size:
+        if item_ids.dim() not in (1, 2) or (item_ids.dim() == 2 and item_ids.size(1) != 1):
             raise ValueError("item_id_feature must contain one item ID per row.")
         if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
             raise ValueError("Item IDs must be finite.")
         item_ids = item_ids.reshape(batch_size)
-        valid = item_ids[:, None] != item_ids[None, :]
-        if not valid.any():
+        if not (item_ids != item_ids[0]).any():
             return None
         rows = torch.arange(batch_size, device=y.device)
         if self.in_batch_neg_ratio is None:
-            owners, item_rows = valid.nonzero(as_tuple=True)
+            # Start with each positive, then visit all other rows in the batch.
+            donors = (rows[:, None] + rows[None, :]) % batch_size
         else:
-            # Sampling with replacement keeps the requested ratio even for small pools.
-            item_rows = torch.multinomial(valid.float(), self.in_batch_neg_ratio, replacement=True, generator=self._sampler_generator).reshape(-1)
-            owners = rows.repeat_interleave(self.in_batch_neg_ratio)
-        labels = torch.cat([torch.ones(batch_size, device=y.device), torch.zeros_like(owners, dtype=torch.float32)])
-        owners = torch.cat([rows, owners])
-        item_rows = torch.cat([rows, item_rows])
-        # Keep each positive followed by its negatives, as in the original batches.
-        order = owners.argsort(stable=True)
-        owners, item_rows, labels = owners[order], item_rows[order], labels[order]
+            # Equal IDs form one block in sorted order. Draw outside that block,
+            # e.g. [7, 7, 8, 9]: item 7 draws from the two rows after its block.
+            _, groups, counts = torch.unique(item_ids, return_inverse=True, return_counts=True)
+            item_order = item_ids.argsort()
+            group_sizes = counts[groups, None]
+            group_starts = (counts.cumsum(0) - counts)[groups, None]
+            sampled = (torch.rand((batch_size, self.in_batch_neg_ratio), device=y.device, generator=self._sampler_generator) * (batch_size - group_sizes)).long()
+            donors = item_order[sampled + (sampled >= group_starts) * group_sizes]
+            donors = torch.cat([rows[:, None], donors], dim=1)
+        # Keep the positive first; remove same-item negatives in full-batch mode.
+        valid = (donors == rows[:, None]) | (item_ids[donors] != item_ids[:, None])
+        owners = rows[:, None].expand_as(donors)[valid]
+        item_rows = donors[valid]
+        labels = (owners == item_rows).float()
         paired = {name: values[item_rows if name in self.item_features else owners] for name, values in x_dict.items()}
         return paired, labels
 

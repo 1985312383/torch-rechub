@@ -126,17 +126,7 @@ class SASRec(torch.nn.Module):
         if self.mode == "user":
             return None
         if self.item_feature is not None or self.mode in ("in_batch", "item"):
-            if self.item_feature is not None:
-                item_ids = x[self.item_feature.name]
-            elif self.mode == 'item':
-                item_ids = x['target']
-            else:
-                item_ids = x[self.features[1].name]
-                if item_ids.dim() == 2:
-                    seq = x[self.features[0].name]
-                    positions = torch.arange(seq.size(1), device=seq.device).expand_as(seq)
-                    last = positions.masked_fill(seq == 0, -1).max(dim=1).values.clamp(min=0)
-                    item_ids = item_ids.gather(1, last.unsqueeze(1)).squeeze(1)
+            item_ids = self.get_item_ids(x)
             # Use the embedding layer to get item embeddings
             item_emb = self.item_emb.embed_dict[self.features[0].name](item_ids)
             if self.mode == "item":
@@ -168,6 +158,20 @@ class SASRec(torch.nn.Module):
         neg_logits = (seq_output * neg_embed).sum(dim=-1)
 
         return pos_logits, neg_logits
+
+    def get_item_ids(self, x):
+        """Return the positive item IDs used by the item tower."""
+        if self.item_feature is not None:
+            return x[self.item_feature.name]
+        if self.mode == 'item':
+            return x['target']
+        item_ids = x[self.features[1].name]
+        if item_ids.dim() == 2:
+            seq = x[self.features[0].name]
+            positions = torch.arange(seq.size(1), device=seq.device).expand_as(seq)
+            last = positions.masked_fill(seq == 0, -1).max(dim=1).values.clamp(min=0)
+            item_ids = item_ids.gather(1, last.unsqueeze(1)).squeeze(1)
+        return item_ids
 
 
 class PointWiseFeedForward(torch.nn.Module):
