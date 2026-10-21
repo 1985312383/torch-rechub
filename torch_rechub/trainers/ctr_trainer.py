@@ -64,17 +64,12 @@ class CTRTrainer(object):
         if isinstance(item_features, str):
             item_features = [item_features]
         self.item_features = [getattr(feature, 'name', feature) for feature in item_features or []]
-        self.item_id_feature = getattr(item_id_feature, 'name', item_id_feature)
+        self.item_id_feature = item_id_feature
         if in_batch_neg:
             if not self.item_features or any(not isinstance(name, str) or not name for name in self.item_features):
                 raise ValueError("Provide item_features, e.g. ['item_id', 'cate_id'], for in-batch ranking.")
             if len(set(self.item_features)) != len(self.item_features):
                 raise ValueError("item_features must not contain duplicate column names.")
-            if self.item_id_feature == 'item_id' and self.item_id_feature not in self.item_features:
-                # Keep existing MovieLens/Amazon examples without changing their calls.
-                aliases = [name for name in ('movie_id', 'target_item_id') if name in self.item_features]
-                if len(aliases) == 1:
-                    self.item_id_feature = aliases[0]
             if self.item_id_feature not in self.item_features:
                 raise ValueError("item_id_feature must name the item ID column included in item_features.")
             if in_batch_neg_ratio is not None and (not isinstance(in_batch_neg_ratio, int) or isinstance(in_batch_neg_ratio, bool) or in_batch_neg_ratio < 1):

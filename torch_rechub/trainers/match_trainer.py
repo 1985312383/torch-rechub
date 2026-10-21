@@ -38,7 +38,8 @@ class MatchTrainer(object):
         hard_negative (bool): whether to choose hardest negatives within batch (top-k by score) instead of uniform random.
         sampler_seed (int): optional random seed for in-batch sampler to ease reproducibility/testing.
         item_id_feature (str): positive item ID column, default="item_id".
-            Specify another column name explicitly; session labels use "target".
+            The column must contain the model's positive item ID for each row.
+            Specify another column name explicitly; missing columns raise KeyError.
     """
 
     def __init__(
@@ -81,7 +82,7 @@ class MatchTrainer(object):
         self.device = torch.device(device)
         self.model.to(self.device)
         self.in_batch_neg = in_batch_neg
-        self.item_id_feature = getattr(item_id_feature, 'name', item_id_feature)
+        self.item_id_feature = item_id_feature
         if in_batch_neg and (not isinstance(self.item_id_feature, str) or not self.item_id_feature):
             raise ValueError("item_id_feature must name the positive item ID column.")
         self.in_batch_neg_ratio = in_batch_neg_ratio
@@ -380,29 +381,8 @@ class MatchTrainer(object):
         )
 
     def _inbatch_item_ids(self, x_dict):
-        """Read the same positive item IDs as the model's item tower."""
-        name = self.item_id_feature
-        model = self.model
-        if name == 'item_id' and name not in x_dict:
-            # Existing session models already define their target, unlike item attributes.
-            feature = getattr(model, 'item_feature', None)
-            if feature is not None:
-                name = feature.name
-            elif hasattr(model, 'item_history_feature'):
-                name = 'target'
-            else:
-                features = getattr(model, 'item_features', None) or getattr(model, 'pos_item_features', [])
-                names = {getattr(feature, 'name', feature) for feature in features}
-                aliases = [column for column in ('movie_id', 'target_item_id') if column in names and column in x_dict]
-                if len(aliases) == 1:
-                    name = aliases[0]
-        if self.item_id_feature == 'item_id' and hasattr(model, 'get_item_ids'):
-            # Sequence models own the choice of the positive timestep.
-            item_ids = model.get_item_ids(x_dict)
-        else:
-            if name not in x_dict:
-                raise ValueError(f"Missing item ID column: {name}. Set item_id_feature to the positive item ID column in your data.")
-            item_ids = x_dict[name]
+        """Read the configured positive item ID column without inferring names."""
+        item_ids = x_dict[self.item_id_feature]
         if item_ids.dim() not in (1, 2) or (item_ids.dim() == 2 and item_ids.size(1) != 1):
             raise ValueError("item_id_feature must contain one item ID per row.")
         if item_ids.is_floating_point() and not torch.isfinite(item_ids).all():
