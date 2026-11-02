@@ -16,7 +16,7 @@ class CTRTrainer(object):
         model (nn.Module): any single-task ranking model.
         optimizer_fn (torch.optim): optimizer function of pytorch (default = `torch.optim.Adam`).
         optimizer_params (dict): parameters of optimizer_fn.
-        scheduler_fn (torch.optim.lr_scheduler) : torch scheduling class, eg. `torch.optim.lr_scheduler.StepLR`.
+        scheduler_fn (torch.optim.lr_scheduler): optional scheduler called with step() once per epoch, e.g. StepLR.
         scheduler_params (dict): parameters of optimizer scheduler_fn.
         n_epoch (int): epoch number of training.
         earlystop_patience (int): how long to wait after last time validation auc improved (default=10).
@@ -89,7 +89,7 @@ class CTRTrainer(object):
             regularization_params = {"embedding_l1": 0.0, "embedding_l2": 0.0, "dense_l1": 0.0, "dense_l2": 0.0}
         self.scheduler = None
         if scheduler_fn is not None:
-            self.scheduler = scheduler_fn(self.optimizer, **scheduler_params)
+            self.scheduler = scheduler_fn(self.optimizer, **(scheduler_params or {}))
         self.loss_mode = loss_mode
         self.criterion = torch.nn.BCELoss()  # default loss cross_entropy
         self.evaluate_fn = roc_auc_score  # default evaluate function
@@ -128,8 +128,9 @@ class CTRTrainer(object):
         return paired, labels.reshape(-1)
 
     def train_one_epoch(self, data_loader, log_interval=10):
+        """Train one epoch; log_interval is a positive integer, defaulting to 10."""
         self.model.train()
-        total_loss = 0
+        interval_loss = 0
         epoch_loss = 0
         batch_count = 0
         skipped_batches = 0
@@ -159,12 +160,12 @@ class CTRTrainer(object):
             self.model.zero_grad()
             loss.backward()
             self.optimizer.step()
-            total_loss += loss.item()
+            interval_loss += loss.item()
             epoch_loss += loss.item()
             batch_count += 1
             if batch_count % log_interval == 0:
-                tk0.set_postfix(loss=total_loss / log_interval)
-                total_loss = 0
+                tk0.set_postfix(loss=interval_loss / log_interval, lr=self.optimizer.param_groups[0]['lr'])
+                interval_loss = 0
 
         if self.in_batch_neg and batch_count == 0:
             raise ValueError("No usable in-batch ranking batches. Provide at least two positive rows per batch.")
@@ -173,35 +174,46 @@ class CTRTrainer(object):
         # Return average epoch loss
         return epoch_loss / batch_count if batch_count > 0 else 0
 
-    def fit(self, train_dataloader, val_dataloader=None):
+    def fit(self, train_dataloader, val_dataloader=None, log_interval=10):
+        """Train with progress updates every log_interval trained batches.
+
+        Use a positive integer for log_interval (default: 10).
+        Set log_interval=1 to show each batch's loss and learning rate.
+        """
+        model_file = os.path.join(self.model_path, "model.pth")
         for logger in self._iter_loggers():
             logger.log_hyperparams({'n_epoch': self.n_epoch, 'learning_rate': self.optimizer.param_groups[0]['lr'], 'loss_mode': self.loss_mode})
 
         for epoch_i in range(self.n_epoch):
             print('epoch:', epoch_i)
-            train_loss = self.train_one_epoch(train_dataloader)
+            train_loss = self.train_one_epoch(train_dataloader, log_interval=log_interval)
 
             for logger in self._iter_loggers():
                 logger.log_metrics({'train/loss': train_loss, 'learning_rate': self.optimizer.param_groups[0]['lr']}, step=epoch_i)
 
+            print("Current lr : {}".format(self.optimizer.param_groups[0]['lr']))
             if self.scheduler is not None:
-                if epoch_i % self.scheduler.step_size == 0:
-                    print("Current lr : {}".format(self.optimizer.state_dict()['param_groups'][0]['lr']))
                 self.scheduler.step()  # update lr in epoch level by scheduler
 
             if val_dataloader:
                 auc = self.evaluate(self.model, val_dataloader)
                 print('epoch:', epoch_i, 'validation: auc:', auc)
 
+                is_best = auc > self.early_stopper.best_auc
+                stop_training = self.early_stopper.stop_training(auc, self.model.state_dict())
+                if is_best:
+                    torch.save(self.early_stopper.best_weights, model_file)
+
                 for logger in self._iter_loggers():
                     logger.log_metrics({'val/auc': auc}, step=epoch_i)
 
-                if self.early_stopper.stop_training(auc, self.model.state_dict()):
+                if stop_training:
                     print(f'validation: best auc: {self.early_stopper.best_auc}')
-                    self.model.load_state_dict(self.early_stopper.best_weights)
                     break
 
-        torch.save(self.model.state_dict(), os.path.join(self.model_path, "model.pth"))  # save best auc model
+        if val_dataloader and self.early_stopper.best_weights is not None:
+            self.model.load_state_dict(self.early_stopper.best_weights)
+        torch.save(self.model.state_dict(), model_file)
 
         for logger in self._iter_loggers():
             logger.finish()

@@ -1,9 +1,8 @@
 """Tests for the TIGER examples: TigerSeqDataset / Trie token+collate logic and
 a toy end-to-end smoke run of the MovieLens example script.
 
-The dataset / Trie / collate tests are offline and always run. The example
-script imports ``transformers`` at module load and the full smoke run needs the
-``t5-small`` weights, so those are skipped when unavailable.
+The dataset / Trie / collate tests are offline. The end-to-end example builds
+an offline semantic-token T5 and needs transformers, not downloaded weights.
 """
 
 import importlib.util
@@ -252,19 +251,10 @@ def test_movielens_prepare_data_aligns_to_vocab(tmp_path):
     assert inters["1"] == [1, 2, 3]  # vocab token ids, chronological, movie 99 skipped
 
 
-@pytest.mark.slow
 @pytest.mark.skipif(not HAS_TRANSFORMERS, reason="transformers is not installed")
 def test_movielens_toy_end_to_end(tmp_path, monkeypatch):
-    """Full generate -> train -> test smoke run on toy data. Skips when the
-    ``t5-small`` weights cannot be loaded (e.g. offline CI)."""
+    """Explicit toy preparation -> offline train -> constrained beam test."""
     module = _load_example("run_tiger_movielens.py")
-    try:
-        from transformers import T5Tokenizer
-
-        T5Tokenizer.from_pretrained("t5-small")
-    except Exception as exc:  # noqa: BLE001 - network / cache miss => skip
-        pytest.skip(f"t5-small unavailable: {exc}")
-
     argv = [
         "run_tiger_movielens.py",
         "--mode",
@@ -276,7 +266,7 @@ def test_movielens_toy_end_to_end(tmp_path, monkeypatch):
         "--output_dir",
         str(tmp_path / "ckpt"),
         "--toy_num_users",
-        "12",
+        "2",
         "--toy_num_items",
         "16",
         "--epochs",
@@ -286,7 +276,7 @@ def test_movielens_toy_end_to_end(tmp_path, monkeypatch):
         "--gradient_accumulation_steps",
         "1",
         "--num_beams",
-        "4",
+        "2",
         "--test_batch_size",
         "2",
         "--num_workers",
@@ -294,4 +284,5 @@ def test_movielens_toy_end_to_end(tmp_path, monkeypatch):
     ]
     monkeypatch.setattr(sys, "argv", argv)
     args = module.parse_args()
+    module.generate_toy_data(args)  # Explicit, safe data preparation, never implicit overwrite.
     module.main(args)  # should run without raising

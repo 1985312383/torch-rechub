@@ -1,6 +1,8 @@
+import hashlib
 import json
 import os
 import random
+from numbers import Integral
 
 import numpy as np
 import pandas as pd
@@ -139,7 +141,7 @@ def generate_seq_feature(data, user_col, item_col, time_col, item_attribute_cols
     shuffle : bool, default=True
         Shuffle train/val/test.
     max_len : int, default=50
-        Max history length.
+        Max history length per sample; does not limit train/val/test splitting.
     in_batch_neg : bool, default=False
         Generate positive-only training rows for CTRTrainer. Validation and test
         retain their original positive/negative pairs for supervised evaluation.
@@ -149,6 +151,8 @@ def generate_seq_feature(data, user_col, item_col, time_col, item_attribute_cols
     tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         Train, validation, and test data with sequence features.
     """
+    if max_len < 1:
+        raise ValueError("max_len must be at least 1")
     for feat in data:
         le = LabelEncoder()
         data[feat] = le.fit_transform(data[feat])
@@ -174,8 +178,8 @@ def generate_seq_feature(data, user_col, item_col, time_col, item_attribute_cols
             continue
 
         neg_list = None if in_batch_neg else [neg_sample(pos_list, n_items) for _ in range(len_pos_list)]
-        for i in range(1, min(len_pos_list, max_len)):
-            hist_item = pos_list[:i]
+        for i in range(1, len_pos_list):
+            hist_item = pos_list[max(0, i - max_len):i]
             hist_item = hist_item + [0] * (max_len - len(hist_item))
             pos_item = pos_list[i]
             neg_item = neg_list[i] if neg_list is not None else (neg_sample(pos_list, n_items) if i >= len_pos_list - 2 else None)
@@ -183,7 +187,7 @@ def generate_seq_feature(data, user_col, item_col, time_col, item_attribute_cols
             neg_seq = [0, neg_item, uid, hist_item] if neg_item is not None else None
             if len(item_attribute_cols) > 0:
                 for attr_col in item_attribute_cols:  # the history of item attribute features
-                    hist_attr = hist[attr_col].tolist()[:i]
+                    hist_attr = hist[attr_col].tolist()[max(0, i - max_len):i]
                     hist_attr = hist_attr + [0] * (max_len - len(hist_attr))
                     pos2attr = [hist_attr, item2attr[attr_col][pos_item]]
                     pos_seq += pos2attr
@@ -240,9 +244,33 @@ def df_to_dict(data):
 
 
 def neg_sample(click_hist, item_size):
-    neg = random.randint(1, item_size)
-    while neg in click_hist:
+    """Uniformly sample an unseen item in [1, item_size], without unbounded retries."""
+    if isinstance(item_size, bool) or not isinstance(item_size, Integral) or item_size < 1:
+        raise ValueError("item_size must be a positive integer")
+    if isinstance(click_hist, torch.Tensor):
+        click_hist = click_hist.detach().reshape(-1).tolist()
+    seen = set()
+    for item in click_hist:
+        try:
+            item_id = int(item)
+        except (TypeError, ValueError, OverflowError):
+            continue  # Nonintegral/unrepresentable IDs cannot equal a sampled integer.
+        if item == item_id and 1 <= item_id <= item_size:
+            seen.add(item_id)
+    available = item_size - len(seen)
+    if available == 0:
+        raise ValueError("No unseen items in the catalog; cannot sample a negative")
+    # Retain the original seeded draws in the common, low-coverage case.
+    for _ in range(32):
         neg = random.randint(1, item_size)
+        if neg not in seen:
+            return neg
+    # Draw a rank in the complement without allocating the entire catalog.
+    neg = random.randint(1, available)
+    for item in sorted(seen):
+        if item > neg:
+            break
+        neg += 1
     return neg
 
 
@@ -339,6 +367,8 @@ def create_seq_features(data, seq_feature_col=['item_id', 'cate_id'], max_len=50
     tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         Train/val/test splits with sequence features.
     """
+    if max_len < 1:
+        raise ValueError("max_len must be at least 1")
     for feat in data:
         le = LabelEncoder()
         data[feat] = le.fit_transform(data[feat])
@@ -359,8 +389,8 @@ def create_seq_features(data, seq_feature_col=['item_id', 'cate_id'], max_len=50
         if len(item[2]) < drop_short:
             continue
         user_id = item[1]
-        click_hist_list = item[2][:max_len]
-        cate_hist_list = item[3][:max_len]
+        click_hist_list = item[2]
+        cate_hist_list = item[3]
 
         neg_list = [neg_sample(click_hist_list, n_items) for _ in range(len(click_hist_list))]
         hist_list = []
@@ -368,12 +398,14 @@ def create_seq_features(data, seq_feature_col=['item_id', 'cate_id'], max_len=50
         for i in range(1, len(click_hist_list)):
             hist_list.append(click_hist_list[i - 1])
             cate_list.append(cate_hist_list[i - 1])
-            hist_list_pad = hist_list + [0] * (max_len - len(hist_list))
-            cate_list_pad = cate_list + [0] * (max_len - len(cate_list))
+            history_items = hist_list[-max_len:]
+            history_cates = cate_list[-max_len:]
+            hist_list_pad = history_items + [0] * (max_len - len(history_items))
+            cate_list_pad = history_cates + [0] * (max_len - len(history_cates))
             if i == len(click_hist_list) - 1:
                 test_data.append([user_id, hist_list_pad, cate_list_pad, click_hist_list[i], cate_hist_list[i], 1])
                 test_data.append([user_id, hist_list_pad, cate_list_pad, neg_list[i], item2cate_dict[neg_list[i]], 0])
-            if i == len(click_hist_list) - 2:
+            elif i == len(click_hist_list) - 2:
                 val_data.append([user_id, hist_list_pad, cate_list_pad, click_hist_list[i], cate_hist_list[i], 1])
                 val_data.append([user_id, hist_list_pad, cate_list_pad, neg_list[i], item2cate_dict[neg_list[i]], 0])
             else:
@@ -601,14 +633,19 @@ class EmbDataset(Dataset):
 
 
 class TigerSeqDataset(Dataset):
+    """Item histories with unique semantic token lists; user_bucket_size=0 disables user tokens."""
 
-    def __init__(self, inters_json, indices_json, max_his_len, mode="train", sample_num=0):
+    def __init__(self, inters_json, indices_json, max_his_len, mode="train", sample_num=0, user_bucket_size=0):
 
         super().__init__()
 
         self.max_his_len = max_his_len
         self.sample_num = sample_num
         self.mode = mode
+        self.user_bucket_size = user_bucket_size
+        codes = ["".join(code) for code in indices_json.values()]
+        if len(set(codes)) != len(codes):
+            raise ValueError("Semantic IDs must identify each item uniquely; export collision suffixes first")
 
         # cache
         self.new_tokens = None
@@ -652,6 +689,12 @@ class TigerSeqDataset(Dataset):
             history = history[-self.max_his_len:]
         return history
 
+    def _history_text(self, uid, history):
+        if not self.user_bucket_size:
+            return "".join(history)
+        bucket = int.from_bytes(hashlib.sha256(str(uid).encode("utf-8")).digest()[:8], "big") % self.user_bucket_size
+        return f"<user_{bucket}>" + "".join(history)
+
     def _process_train_data(self):
         inter_data = []
         for uid in self.remapped_inters:
@@ -660,7 +703,7 @@ class TigerSeqDataset(Dataset):
                 history = items[:i]
                 history = self._truncate_history(history)
 
-                inter_data.append({"item": items[i], "inters": "".join(history)})
+                inter_data.append({"item": items[i], "inters": self._history_text(uid, history)})
 
         return inter_data
 
@@ -672,7 +715,7 @@ class TigerSeqDataset(Dataset):
             history = items[:-2]
             history = self._truncate_history(history)
 
-            inter_data.append({"item": items[-2], "inters": "".join(history)})
+            inter_data.append({"item": items[-2], "inters": self._history_text(uid, history)})
 
         return inter_data
 
@@ -684,7 +727,7 @@ class TigerSeqDataset(Dataset):
             history = items[:-1]
             history = self._truncate_history(history)
 
-            inter_data.append({"item": items[-1], "inters": "".join(history)})
+            inter_data.append({"item": items[-1], "inters": self._history_text(uid, history)})
 
         if self.sample_num > 0:
             all_idx = np.arange(len(inter_data))
@@ -724,16 +767,12 @@ class TigerSeqDataset(Dataset):
                 tokens.add(token)
 
         self.new_tokens = sorted(list(tokens))
+        self.new_tokens.extend(f"<user_{bucket}>" for bucket in range(self.user_bucket_size))
         return self.new_tokens
 
     def get_all_items(self, as_list=False):
-        if self.all_items is not None:
-            return self.all_items
-
         items = ["".join(index) for index in self.indices.values()]
-        self.all_items = items if as_list else set(items)
-
-        return self.all_items
+        return items if as_list else set(items)
 
     def get_prefix_allowed_tokens_fn(self, tokenizer):
 
